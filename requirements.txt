@@ -9,7 +9,8 @@ alembic==1.12.1
 
 # Authentication & Security
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+passlib==1.7.4
+bcrypt==4.0.1
 python-multipart==0.0.6
 
 # Configuration & Environment
@@ -20,7 +21,7 @@ pydantic-settings==2.1.0
 # File Processing
 reportlab==4.0.7
 pillow==10.1.0
-
+pydantic[email]
 # Production dependencies (install when moving to production)
 # supabase==2.0.3
 # cloudinary==1.36.0

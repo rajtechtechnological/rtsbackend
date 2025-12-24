@@ -6,7 +6,7 @@ from app.config import settings
 from pathlib import Path
 
 # Import routes (we'll create these next)
-from app.routes import auth, institutions, students, courses, staff, attendance, payroll, certificates
+from app.routes import auth, institutions, students, courses, staff, attendance, payroll, certificates, dashboard
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -18,13 +18,20 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS
+# Configure CORS - MUST be before route includes
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL, "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",  # Add port 3002
+        "http://localhost:3003",
+        settings.FRONTEND_URL
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Mount static files directory for local file storage
@@ -35,6 +42,7 @@ if settings.USE_LOCAL_STORAGE:
 
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
+app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
 app.include_router(institutions.router, prefix="/api/institutions", tags=["Institutions"])
 app.include_router(students.router, prefix="/api/students", tags=["Students"])
 app.include_router(courses.router, prefix="/api/courses", tags=["Courses"])

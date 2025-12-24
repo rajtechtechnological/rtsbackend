@@ -40,10 +40,10 @@ def signup(user_data: UserCreate, db: Session = Depends(get_db)):
     return new_user
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login")
 def login(credentials: UserLogin, db: Session = Depends(get_db)):
     """
-    Login and receive JWT token
+    Login and receive JWT token with user data
     """
     # Find user by email
     user = db.query(User).filter(User.email == credentials.email).first()
@@ -64,7 +64,22 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
     # Create access token
     access_token = create_access_token(data={"sub": str(user.id)})
 
-    return {"access_token": access_token, "token_type": "bearer"}
+    # Return token and user data (matching frontend expectations)
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": str(user.id),
+            "email": user.email,
+            "full_name": user.full_name,
+            "phone": user.phone,
+            "role": user.role,
+            "institution_id": str(user.institution_id) if user.institution_id else None,
+            "is_active": user.is_active,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+        }
+    }
 
 
 @router.get("/me", response_model=UserResponse)
