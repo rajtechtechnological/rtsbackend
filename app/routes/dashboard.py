@@ -289,4 +289,4 @@ def _get_time_ago(date):
         months = delta.days // 30
         return f"{months} month{'s' if months > 1 else ''} ago"
 
-# Made with Bob
+

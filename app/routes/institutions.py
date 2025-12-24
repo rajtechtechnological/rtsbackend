@@ -1,9 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List
 from app.database import get_db
 from app.models.user import User
 from app.models.institution import Institution
+from app.models.student import Student
+from app.models.staff import Staff
 from app.schemas.institution import InstitutionCreate, InstitutionUpdate, InstitutionResponse
 from app.dependencies import get_current_user, require_roles, check_institution_access
 
@@ -50,6 +53,61 @@ def list_institutions(
         ).all()
 
     return institutions
+
+
+@router.get("/stats/summary")
+def get_institutions_summary(
+    current_user: User = Depends(require_roles(["super_admin"])),
+    db: Session = Depends(get_db)
+):
+    """
+    Get summary stats for all institutions (super_admin only)
+    """
+    # Get all institutions with their stats
+    institutions = db.query(Institution).all()
+    
+    institutions_with_stats = []
+    for inst in institutions:
+        # Count staff for this institution
+        staff_count = db.query(func.count(Staff.id)).filter(
+            Staff.institution_id == inst.id
+        ).scalar() or 0
+        
+        # Count students for this institution
+        student_count = db.query(func.count(Student.id)).filter(
+            Student.institution_id == inst.id
+        ).scalar() or 0
+        
+        # Get director info
+        director_name = None
+        if inst.director_id:
+            director = db.query(User).filter(User.id == inst.director_id).first()
+            if director:
+                director_name = director.full_name
+        
+        institutions_with_stats.append({
+            "id": str(inst.id),
+            "name": inst.name,
+            "address": inst.address,
+            "contact_email": inst.contact_email,
+            "contact_phone": inst.contact_phone,
+            "director_name": director_name,
+            "staff_count": staff_count,
+            "student_count": student_count,
+            "status": "active",  # You can add a status field to the model if needed
+            "created_at": inst.created_at.isoformat() if inst.created_at else None
+        })
+    
+    # Calculate totals
+    total_staff = sum(i["staff_count"] for i in institutions_with_stats)
+    total_students = sum(i["student_count"] for i in institutions_with_stats)
+    
+    return {
+        "institutions": institutions_with_stats,
+        "total_franchises": len(institutions_with_stats),
+        "total_staff": total_staff,
+        "total_students": total_students
+    }
 
 
 @router.get("/{institution_id}", response_model=InstitutionResponse)
