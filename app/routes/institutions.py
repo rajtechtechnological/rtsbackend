@@ -9,6 +9,7 @@ from app.models.student import Student
 from app.models.staff import Staff
 from app.schemas.institution import InstitutionCreate, InstitutionUpdate, InstitutionResponse
 from app.dependencies import get_current_user, require_roles, check_institution_access
+from app.services.auth_service import hash_password
 
 router = APIRouter()
 
@@ -21,16 +22,66 @@ def create_institution(
 ):
     """
     Create a new institution (super_admin only)
+    Auto-creates a franchise admin user with:
+    - Email: institution's contact_email
+    - Password: institution's contact_phone (can be changed later)
+    - Role: institution_director
     """
+    # Validate that contact_email and contact_phone are provided
+    if not institution_data.contact_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="contact_email is required to create franchise admin user"
+        )
+
+    if not institution_data.contact_phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="contact_phone is required to set initial password for franchise admin"
+        )
+
+    # Check if a user with this email already exists
+    existing_user = db.query(User).filter(User.email == institution_data.contact_email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"User with email {institution_data.contact_email} already exists"
+        )
+
+    # Step 1: Create the institution first (without director_id)
     new_institution = Institution(
         name=institution_data.name,
         address=institution_data.address,
         contact_email=institution_data.contact_email,
         contact_phone=institution_data.contact_phone,
-        director_id=institution_data.director_id
+        director_id=None  # Will set this after creating the user
     )
 
     db.add(new_institution)
+    db.flush()  # Flush to get the institution ID without committing
+
+    # Step 2: Create franchise admin user
+    # Extract name from email (before @) as a fallback
+    email_username = institution_data.contact_email.split('@')[0]
+    full_name = f"{institution_data.name} Admin"  # Default name
+
+    franchise_admin = User(
+        email=institution_data.contact_email,
+        hashed_password=hash_password(institution_data.contact_phone),  # Password is phone number
+        full_name=full_name,
+        phone=institution_data.contact_phone,
+        role="institution_director",
+        institution_id=new_institution.id,
+        is_active=True
+    )
+
+    db.add(franchise_admin)
+    db.flush()  # Flush to get the user ID
+
+    # Step 3: Link the director to the institution
+    new_institution.director_id = franchise_admin.id
+
+    # Step 4: Commit all changes
     db.commit()
     db.refresh(new_institution)
 
@@ -180,6 +231,10 @@ def delete_institution(
 ):
     """
     Delete institution (super_admin only)
+    Also deletes:
+    - The franchise admin user (director)
+    - All users associated with this institution
+    - Students, Staff, Courses (via cascade)
     """
     institution = db.query(Institution).filter(Institution.id == institution_id).first()
 
@@ -189,7 +244,20 @@ def delete_institution(
             detail="Institution not found"
         )
 
+    # Step 1: Delete all users associated with this institution
+    # This includes the franchise admin and any other staff/student users
+    db.query(User).filter(User.institution_id == institution_id).delete(synchronize_session=False)
+
+    # Step 2: Delete the franchise admin user (director) if not already deleted
+    if institution.director_id:
+        director = db.query(User).filter(User.id == institution.director_id).first()
+        if director:
+            db.delete(director)
+
+    # Step 3: Delete the institution
+    # This will cascade delete students, staff, courses, etc. via SQLAlchemy relationships
     db.delete(institution)
+
     db.commit()
 
     return None

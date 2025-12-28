@@ -12,7 +12,7 @@ class CourseBase(BaseModel):
 
 
 class CourseCreate(CourseBase):
-    institution_id: UUID
+    institution_id: Optional[UUID] = None
 
 
 class CourseUpdate(BaseModel):
@@ -24,7 +24,7 @@ class CourseUpdate(BaseModel):
 
 class CourseResponse(CourseBase):
     id: UUID
-    institution_id: UUID
+    institution_id: Optional[UUID] = None
     created_at: datetime
 
     class Config:
