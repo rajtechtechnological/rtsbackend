@@ -86,3 +86,50 @@ def check_resource_access(user: User, resource_institution_id: UUID) -> bool:
     Check if user can access a resource belonging to an institution
     """
     return check_institution_access(user, resource_institution_id)
+
+
+def can_manage_staff(user: User) -> bool:
+    """
+    Check if user can manage staff (add, edit, delete, set wages)
+    Only franchise admin (institution_director) can manage staff
+    """
+    if user.role not in ["super_admin", "institution_director"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only franchise admins can manage staff"
+        )
+    return True
+
+
+def can_manage_students(user: User) -> bool:
+    """
+    Check if user can manage students (add, edit, delete)
+    Franchise admin and accountant (staff_manager) can manage students
+    Regular staff cannot
+    """
+    if user.role not in ["super_admin", "institution_director", "staff_manager"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only franchise admins and accountants can manage students"
+        )
+    return True
+
+
+def can_view_own_records_only(user: User, staff_id: UUID) -> bool:
+    """
+    Check if regular staff is trying to view only their own records
+    Used for attendance and payroll access
+    """
+    # Super admin and franchise admin can view all
+    if user.role in ["super_admin", "institution_director"]:
+        return True
+
+    # Staff and accountant can only view their own records
+    # Find the staff record for this user
+    if str(user.id) != str(staff_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only view your own records"
+        )
+
+    return True

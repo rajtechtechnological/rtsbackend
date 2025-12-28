@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import date, datetime
 from uuid import UUID
@@ -9,8 +9,13 @@ class StaffBase(BaseModel):
     daily_rate: Optional[float] = None
 
 
-class StaffCreate(StaffBase):
-    user_id: UUID
+class StaffCreate(BaseModel):
+    """Schema for creating a new staff member (creates both User and Staff records)"""
+    full_name: str
+    email: EmailStr
+    phone: str  # Required - used as default password
+    role: str  # 'staff' or 'staff_manager'
+    daily_rate: float
     institution_id: UUID
 
 
@@ -22,9 +27,16 @@ class StaffResponse(StaffBase):
     id: UUID
     user_id: UUID
     institution_id: UUID
-    joining_date: date
+    join_date: date  # Consistent naming with frontend
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+    # User information (from relationship)
+    full_name: str
+    email: str
+    phone: str  # Required
+    role: str
+    status: str  # user.is_active -> 'active' or 'inactive'
 
     class Config:
         from_attributes = True

@@ -8,7 +8,7 @@ from app.models.student import Student
 from app.models.student_course import StudentCourse
 from app.models.fee_payment import FeePayment
 from app.schemas.student import StudentCreate, StudentUpdate, StudentResponse, CourseEnrollmentCreate, FeePaymentCreate
-from app.dependencies import get_current_user, check_resource_access
+from app.dependencies import get_current_user, check_resource_access, can_manage_students
 from app.services.storage_service import storage
 
 router = APIRouter()
@@ -20,7 +20,11 @@ def create_student(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Create a new student"""
+    """
+    Create a new student
+    Requires: Franchise Admin or Accountant role
+    """
+    can_manage_students(current_user)
     check_resource_access(current_user, student_data.institution_id)
 
     new_student = Student(
@@ -79,7 +83,12 @@ def update_student(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update student details"""
+    """
+    Update student details
+    Requires: Franchise Admin or Accountant role
+    """
+    can_manage_students(current_user)
+
     student = db.query(Student).filter(Student.id == student_id).first()
 
     if not student:
