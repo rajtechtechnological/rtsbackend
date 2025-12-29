@@ -104,13 +104,13 @@ def can_manage_staff(user: User) -> bool:
 def can_manage_students(user: User) -> bool:
     """
     Check if user can manage students (add, edit, delete)
-    Franchise admin and accountant (staff_manager) can manage students
-    Regular staff cannot
+    Franchise admin, accountant (staff_manager), and receptionist can manage students
+    Regular staff and students cannot
     """
-    if user.role not in ["super_admin", "institution_director", "staff_manager"]:
+    if user.role not in ["super_admin", "institution_director", "staff_manager", "receptionist"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only franchise admins and accountants can manage students"
+            detail="Only franchise admins, accountants, and receptionists can manage students"
         )
     return True
 
@@ -132,4 +132,17 @@ def can_view_own_records_only(user: User, staff_id: UUID) -> bool:
             detail="You can only view your own records"
         )
 
+    return True
+
+
+def can_record_payments(user: User) -> bool:
+    """
+    Check if user can record student payments
+    Receptionist, Accountant (staff_manager), and Directors can record payments
+    """
+    if user.role not in ["super_admin", "institution_director", "staff_manager", "receptionist"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only receptionists, accountants, and directors can record payments"
+        )
     return True

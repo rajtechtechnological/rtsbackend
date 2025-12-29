@@ -6,6 +6,7 @@ from uuid import UUID
 
 class InstitutionBase(BaseModel):
     name: str
+    district_code: Optional[str] = None  # e.g., NAL, PAT, GAY
     address: Optional[str] = None
     contact_email: Optional[EmailStr] = None
     contact_phone: Optional[str] = None
@@ -17,6 +18,7 @@ class InstitutionCreate(InstitutionBase):
 
 class InstitutionUpdate(BaseModel):
     name: Optional[str] = None
+    district_code: Optional[str] = None
     address: Optional[str] = None
     contact_email: Optional[EmailStr] = None
     contact_phone: Optional[str] = None

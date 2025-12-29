@@ -12,6 +12,7 @@ class Student(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), unique=True)
     institution_id = Column(UUID(as_uuid=True), ForeignKey("institutions.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(String, unique=True, index=True)  # Format: RTS-INST-MM-YYYY-NNNN
     date_of_birth = Column(Date)
     guardian_name = Column(String)
     guardian_phone = Column(String)

@@ -11,6 +11,7 @@ class Institution(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, nullable=False)
+    district_code = Column(String)  # e.g., NAL for Nalanda, PAT for Patna
     address = Column(String)
     contact_email = Column(String)
     contact_phone = Column(String)
