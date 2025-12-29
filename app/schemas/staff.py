@@ -14,7 +14,7 @@ class StaffCreate(BaseModel):
     full_name: str
     email: EmailStr
     phone: str  # Required - used as default password
-    role: str  # 'staff' or 'staff_manager'
+    role: str  # 'staff', 'staff_manager', or 'receptionist'
     daily_rate: float
     institution_id: UUID
 

@@ -45,7 +45,7 @@ def create_staff(
     Creates a User account with:
     - Email: provided email
     - Password: phone number (can be changed later)
-    - Role: staff or staff_manager
+    - Role: staff, staff_manager, or receptionist
     """
     can_manage_staff(current_user)
     check_resource_access(current_user, staff_data.institution_id)
@@ -59,10 +59,10 @@ def create_staff(
         )
 
     # Validate role
-    if staff_data.role not in ["staff", "staff_manager"]:
+    if staff_data.role not in ["staff", "staff_manager", "receptionist"]:
         raise HTTPException(
             status_code=400,
-            detail="Role must be either 'staff' or 'staff_manager'"
+            detail="Role must be either 'staff', 'staff_manager', or 'receptionist'"
         )
 
     # Create User record
