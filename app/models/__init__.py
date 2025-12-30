@@ -8,6 +8,7 @@ from app.models.staff import Staff
 from app.models.attendance import StaffAttendance
 from app.models.payroll import PayrollRecord
 from app.models.certificate import Certificate
+from app.models.course_module import CourseModule, StudentModuleProgress
 
 __all__ = [
     "User",
@@ -20,4 +21,6 @@ __all__ = [
     "StaffAttendance",
     "PayrollRecord",
     "Certificate",
+    "CourseModule",
+    "StudentModuleProgress",
 ]

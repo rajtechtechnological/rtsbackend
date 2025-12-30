@@ -14,9 +14,20 @@ class Student(Base):
     institution_id = Column(UUID(as_uuid=True), ForeignKey("institutions.id", ondelete="CASCADE"), nullable=False, index=True)
     student_id = Column(String, unique=True, index=True)  # Format: RTS-INST-MM-YYYY-NNNN
     date_of_birth = Column(Date)
-    guardian_name = Column(String)
+    father_name = Column(String)  # Father's name
+    guardian_name = Column(String)  # Guardian name (if different from father)
     guardian_phone = Column(String)
     address = Column(String)
+    aadhar_number = Column(String)  # Aadhar card number
+    apaar_id = Column(String)  # APAAR ID (Automated Permanent Academic Account Registry)
+    last_qualification = Column(String)  # Last educational qualification
+
+    # Batch Information
+    batch_time = Column(String, index=True)  # e.g., "9AM-10AM", "10AM-11AM", "3PM-4PM"
+    batch_month = Column(String, index=True)  # e.g., "01", "12" (MM format)
+    batch_year = Column(String, index=True)  # e.g., "2024", "2025" (YYYY format)
+    batch_identifier = Column(String, index=True)  # "A" or "B" for multiple batches in same month
+
     photo_url = Column(String)  # Cloudinary URL or local path
     enrollment_date = Column(Date, server_default=func.current_date())
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -28,3 +39,4 @@ class Student(Base):
     course_enrollments = relationship("StudentCourse", back_populates="student", cascade="all, delete-orphan")
     payments = relationship("FeePayment", back_populates="student", cascade="all, delete-orphan")
     certificates = relationship("Certificate", back_populates="student", cascade="all, delete-orphan")
+    module_progress = relationship("StudentModuleProgress", back_populates="student", cascade="all, delete-orphan")

@@ -22,3 +22,4 @@ class Course(Base):
     student_enrollments = relationship("StudentCourse", back_populates="course", cascade="all, delete-orphan")
     payments = relationship("FeePayment", back_populates="course")
     certificates = relationship("Certificate", back_populates="course")
+    modules = relationship("CourseModule", back_populates="course", cascade="all, delete-orphan", order_by="CourseModule.order_index")

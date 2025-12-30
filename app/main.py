@@ -6,7 +6,7 @@ from app.config import settings
 from pathlib import Path
 
 # Import routes (we'll create these next)
-from app.routes import auth, institutions, students, courses, staff, attendance, payroll, certificates, dashboard, payments
+from app.routes import auth, institutions, students, courses, staff, attendance, payroll, certificates, dashboard, payments, course_modules
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -51,6 +51,7 @@ app.include_router(attendance.router, prefix="/api/attendance", tags=["Attendanc
 app.include_router(payroll.router, prefix="/api/payroll", tags=["Payroll"])
 app.include_router(certificates.router, prefix="/api/certificates", tags=["Certificates"])
 app.include_router(payments.router, prefix="/api/payments", tags=["Payments"])
+app.include_router(course_modules.router, prefix="/api", tags=["Course Modules"])
 
 
 @app.get("/", tags=["Root"])

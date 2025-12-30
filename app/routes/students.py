@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List
 from uuid import UUID
 from datetime import datetime
@@ -8,8 +8,12 @@ from app.models.user import User
 from app.models.student import Student
 from app.models.student_course import StudentCourse
 from app.models.fee_payment import FeePayment
+from app.models.course import Course
+from app.models.course_module import CourseModule, StudentModuleProgress
+from sqlalchemy import and_
 from app.models.institution import Institution
 from app.schemas.student import StudentCreate, StudentUpdate, StudentResponse, CourseEnrollmentCreate, FeePaymentCreate
+from app.schemas.course_module import StudentCourseProgressResponse
 from app.dependencies import get_current_user, check_resource_access, can_manage_students
 from app.services.storage_service import storage
 
@@ -109,9 +113,15 @@ def list_students(
 ):
     """List students filtered by institution"""
     if current_user.role == "super_admin":
-        students = db.query(Student).all()
+        students = db.query(Student).options(
+            joinedload(Student.user),
+            joinedload(Student.course_enrollments)
+        ).all()
     else:
-        students = db.query(Student).filter(
+        students = db.query(Student).options(
+            joinedload(Student.user),
+            joinedload(Student.course_enrollments)
+        ).filter(
             Student.institution_id == current_user.institution_id
         ).all()
 
@@ -128,7 +138,7 @@ def search_student_by_id(
     Search student by student_id (custom ID like RTS-NAL-RCC-12-2025-0001)
     Used by receptionist to find student for payment recording
     """
-    student = db.query(Student).filter(Student.student_id == student_id).first()
+    student = db.query(Student).options(joinedload(Student.user)).filter(Student.student_id == student_id).first()
 
     if not student:
         raise HTTPException(status_code=404, detail="Student not found with this ID")
@@ -147,7 +157,7 @@ def get_student(
     db: Session = Depends(get_db)
 ):
     """Get student details"""
-    student = db.query(Student).filter(Student.id == student_id).first()
+    student = db.query(Student).options(joinedload(Student.user)).filter(Student.id == student_id).first()
 
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -262,6 +272,28 @@ def enroll_in_course(
     return {"message": "Enrolled successfully"}
 
 
+@router.get("/{student_id}/courses")
+def get_student_courses(
+    student_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all courses a student is enrolled in"""
+    student = db.query(Student).filter(Student.id == student_id).first()
+
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    check_resource_access(current_user, student.institution_id)
+
+    # Get all course enrollments
+    enrollments = db.query(StudentCourse).options(
+        joinedload(StudentCourse.course)
+    ).filter(StudentCourse.student_id == student_id).all()
+
+    return enrollments
+
+
 @router.post("/{student_id}/payments")
 def record_payment(
     student_id: UUID,
@@ -289,3 +321,62 @@ def record_payment(
     db.commit()
 
     return {"message": "Payment recorded successfully"}
+
+
+@router.get("/{student_id}/courses/{course_id}/progress", response_model=StudentCourseProgressResponse)
+def get_student_course_progress(
+    student_id: UUID,
+    course_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get detailed progress for a student in a specific course"""
+    # Verify student exists
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # Multi-tenant check or student viewing own progress
+    if current_user.role == "student":
+        if student.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Can only view your own progress")
+    elif current_user.role != "super_admin":
+        if student.institution_id != current_user.institution_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get course
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    # Get all progress records for this student and course
+    progress_records = db.query(StudentModuleProgress).join(
+        CourseModule, StudentModuleProgress.module_id == CourseModule.id
+    ).options(
+        joinedload(StudentModuleProgress.module)
+    ).filter(
+        and_(
+            StudentModuleProgress.student_id == student_id,
+            StudentModuleProgress.course_id == course_id
+        )
+    ).order_by(CourseModule.order_index).all()
+
+    # Calculate statistics
+    total_modules = len(progress_records)
+    completed = sum(1 for p in progress_records if p.status == 'completed')
+    in_progress = sum(1 for p in progress_records if p.status == 'in_progress')
+    not_started = sum(1 for p in progress_records if p.status == 'not_started')
+
+    overall_percentage = (completed / total_modules * 100) if total_modules > 0 else 0
+
+    return StudentCourseProgressResponse(
+        student_id=student_id,
+        course_id=course_id,
+        course_name=course.name,
+        total_modules=total_modules,
+        completed_modules=completed,
+        in_progress_modules=in_progress,
+        not_started_modules=not_started,
+        overall_percentage=round(overall_percentage, 2),
+        module_progress=progress_records
+    )
