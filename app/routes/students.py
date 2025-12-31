@@ -12,7 +12,8 @@ from app.models.course import Course
 from app.models.course_module import CourseModule, StudentModuleProgress
 from sqlalchemy import and_
 from app.models.institution import Institution
-from app.schemas.student import StudentCreate, StudentUpdate, StudentResponse, CourseEnrollmentCreate, FeePaymentCreate
+from app.schemas.student import StudentCreate, StudentUpdate, StudentResponse, CourseEnrollmentCreate, FeePaymentCreate, StudentRegister
+from app.services.auth_service import hash_password
 from app.schemas.course_module import StudentCourseProgressResponse
 from app.dependencies import get_current_user, check_resource_access, can_manage_students
 from app.services.storage_service import storage
@@ -94,14 +95,106 @@ def create_student(
         institution_id=student_data.institution_id,
         student_id=student_id,  # Auto-generated
         date_of_birth=student_data.date_of_birth,
+        father_name=student_data.father_name,
         guardian_name=student_data.guardian_name,
         guardian_phone=student_data.guardian_phone,
-        address=student_data.address
+        address=student_data.address,
+        aadhar_number=student_data.aadhar_number,
+        apaar_id=student_data.apaar_id,
+        last_qualification=student_data.last_qualification,
+        batch_time=student_data.batch_time,
+        batch_month=student_data.batch_month,
+        batch_year=student_data.batch_year,
+        batch_identifier=student_data.batch_identifier,
     )
 
     db.add(new_student)
     db.commit()
     db.refresh(new_student)
+
+    return new_student
+
+
+@router.post("/register", response_model=StudentResponse, status_code=status.HTTP_201_CREATED)
+def register_student(
+    data: StudentRegister,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Register a new student (creates user + student in one call)
+    - Creates user account with phone as default password
+    - Creates student record with all details
+    - Optionally enrolls in a course
+    """
+    can_manage_students(current_user)
+
+    # Use current user's institution
+    institution_id = current_user.institution_id
+    if not institution_id:
+        raise HTTPException(status_code=400, detail="User not associated with an institution")
+
+    # Check if email already exists
+    existing_user = db.query(User).filter(User.email == data.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Create user with phone as default password (or a default if no phone)
+    default_password = data.phone if data.phone else "student123"
+    hashed_password = hash_password(default_password)
+
+    new_user = User(
+        email=data.email,
+        full_name=data.full_name,
+        phone=data.phone,
+        hashed_password=hashed_password,
+        role="student",
+        institution_id=institution_id,
+        is_active=True
+    )
+    db.add(new_user)
+    db.flush()  # Get the user ID without committing
+
+    # Generate unique student ID
+    student_id = generate_student_id(db, institution_id)
+
+    # Create student record
+    new_student = Student(
+        user_id=new_user.id,
+        institution_id=institution_id,
+        student_id=student_id,
+        date_of_birth=data.date_of_birth,
+        father_name=data.father_name,
+        guardian_name=data.guardian_name,
+        guardian_phone=data.guardian_phone,
+        address=data.address,
+        aadhar_number=data.aadhar_number,
+        apaar_id=data.apaar_id,
+        last_qualification=data.last_qualification,
+        batch_time=data.batch_time,
+        batch_month=data.batch_month,
+        batch_year=data.batch_year,
+        batch_identifier=data.batch_identifier,
+    )
+    db.add(new_student)
+    db.flush()
+
+    # Optionally enroll in course
+    if data.course_id:
+        course = db.query(Course).filter(Course.id == data.course_id).first()
+        if course:
+            enrollment = StudentCourse(
+                student_id=new_student.id,
+                course_id=data.course_id
+            )
+            db.add(enrollment)
+
+    db.commit()
+    db.refresh(new_student)
+
+    # Load relationships for response
+    db.refresh(new_student)
+    new_student.user = new_user
 
     return new_student
 

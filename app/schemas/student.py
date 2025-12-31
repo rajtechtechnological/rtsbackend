@@ -77,6 +77,30 @@ class StudentResponse(StudentBase):
         from_attributes = True
 
 
+class StudentRegister(BaseModel):
+    """Combined user + student registration"""
+    # User fields
+    full_name: str
+    email: str
+    phone: Optional[str] = None
+    # Student fields
+    date_of_birth: Optional[date] = None
+    father_name: Optional[str] = None
+    guardian_name: Optional[str] = None
+    guardian_phone: Optional[str] = None
+    address: Optional[str] = None
+    aadhar_number: Optional[str] = None
+    apaar_id: Optional[str] = None
+    last_qualification: Optional[str] = None
+    # Batch fields
+    batch_time: Optional[str] = None
+    batch_month: Optional[str] = None
+    batch_year: Optional[str] = None
+    batch_identifier: Optional[str] = None
+    # Course enrollment (optional)
+    course_id: Optional[UUID] = None
+
+
 class CourseEnrollmentCreate(BaseModel):
     course_id: UUID
 

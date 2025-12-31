@@ -9,6 +9,7 @@ from app.models.attendance import StaffAttendance
 from app.models.payroll import PayrollRecord
 from app.models.certificate import Certificate
 from app.models.course_module import CourseModule, StudentModuleProgress
+from app.models.exam import Exam, Question, ExamSchedule, ExamAttempt, StudentAnswer
 
 __all__ = [
     "User",
@@ -23,4 +24,9 @@ __all__ = [
     "Certificate",
     "CourseModule",
     "StudentModuleProgress",
+    "Exam",
+    "Question",
+    "ExamSchedule",
+    "ExamAttempt",
+    "StudentAnswer",
 ]
