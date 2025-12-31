@@ -475,8 +475,8 @@ def enter_module_marks(
     Accountants enter exam marks for a student's module.
     This automatically calculates pass/fail and updates status.
     """
-    if current_user.role not in ["accountant", "institution_director", "super_admin"]:
-        raise HTTPException(status_code=403, detail="Only accountants can enter marks")
+    if current_user.role not in ["accountant", "staff_manager", "institution_director", "super_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized to enter marks")
 
     # Verify student exists
     student = db.query(Student).filter(Student.id == marks_data.student_id).first()
