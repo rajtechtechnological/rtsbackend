@@ -50,6 +50,28 @@ class QuestionBulkCreate(BaseModel):
     questions: List[QuestionCreate]
 
 
+class QuestionPublic(BaseModel):
+    """
+    Student-facing question schema (F-14).
+
+    INVARIANT: this schema MUST NEVER include `correct_option` or
+    `explanation`. It is the only shape in which questions may be
+    serialized to a student while an attempt is not yet completed
+    and verified.
+    """
+    id: UUID
+    index: Optional[int] = None
+    question_text: str
+    marks: int
+    option_a: str
+    option_b: str
+    option_c: str
+    option_d: str
+
+    class Config:
+        from_attributes = True
+
+
 # ============ Exam Schemas ============
 
 class ExamBase(BaseModel):
@@ -181,7 +203,8 @@ class ExamAttemptStart(BaseModel):
     total_questions: int
     start_time: datetime
     end_time: datetime  # Calculated: start_time + duration
-    questions: List[Dict[str, Any]]  # Shuffled questions without correct answers
+    deadline: datetime  # Server-authoritative: start_time + duration (F-13)
+    questions: List[QuestionPublic]  # Shuffled questions, no correct answers (F-14)
 
 
 class ExamAttemptState(BaseModel):
@@ -192,7 +215,8 @@ class ExamAttemptState(BaseModel):
     status: str
     current_question_index: int
     total_questions: int
-    time_remaining_seconds: int
+    time_remaining_seconds: int  # Display hint only — deadline is authoritative
+    deadline: datetime  # Server-authoritative: start_time + duration (F-13)
     answers: Dict[str, Optional[str]]  # question_id -> selected_option
     marked_for_review: List[str]  # List of question_ids marked for review
 

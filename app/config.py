@@ -10,7 +10,8 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_KEY: str = ""
 
     # Auth Configuration
-    JWT_SECRET_KEY: str = "your-secret-key-change-this-in-production"
+    # SECURITY (F-11): no default — the app must refuse to start if this is unset.
+    JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 

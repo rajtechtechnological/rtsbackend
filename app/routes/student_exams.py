@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_
 from typing import List, Dict, Any, Optional
 from uuid import UUID
-from datetime import datetime, timedelta, date, time
+from datetime import datetime, timedelta, date, time, timezone
 import random
 from app.database import get_db
 from app.models.user import User
@@ -13,11 +13,39 @@ from app.models.student_course import StudentCourse
 from app.models.fee_payment import FeePayment
 from app.schemas.exam import (
     AvailableExamResponse, ExamAttemptStart, ExamAttemptState,
-    ExamAttemptResponse, ExamResultResponse, AnswerSubmit
+    ExamAttemptResponse, ExamResultResponse, AnswerSubmit, QuestionPublic
 )
 from app.dependencies import get_current_user
 
 router = APIRouter()
+
+# Grace period after the server-computed deadline (F-13). Never derived from
+# any client-provided time.
+EXAM_DEADLINE_GRACE_SECONDS = 30
+
+
+def _server_now(reference: Optional[datetime] = None) -> datetime:
+    """
+    Server-authoritative current time (F-13). Matches the tz-awareness of
+    `reference` so it can be compared with DB-loaded timestamps safely.
+    Client-provided times are never trusted.
+    """
+    if reference is not None and reference.tzinfo is not None:
+        return datetime.now(timezone.utc)
+    return datetime.now()
+
+
+def _attempt_deadline(attempt: ExamAttempt, exam: Exam) -> datetime:
+    """Server-authoritative deadline: start_time + duration (F-13)."""
+    return attempt.start_time + timedelta(minutes=exam.duration_minutes)
+
+
+def _expire_attempt(attempt: ExamAttempt, db: Session) -> None:
+    """Grade whatever answers exist and mark the attempt timed out (F-13)."""
+    attempt.status = 'timed_out'
+    attempt.end_time = _server_now(attempt.start_time)
+    _calculate_results(attempt, db)
+    db.commit()
 
 
 def get_student_from_user(user: User, db: Session) -> Student:
@@ -47,8 +75,10 @@ def check_exam_schedule(exam: Exam, student: Student, db: Session) -> tuple[bool
     current_time = now.time()
 
     # Find matching schedule for student's batch
+    # Tenant isolation (F-02): schedules must belong to the student's institution
     schedule_query = db.query(ExamSchedule).filter(
         ExamSchedule.exam_id == exam.id,
+        ExamSchedule.institution_id == student.institution_id,
         ExamSchedule.is_active == True,
         ExamSchedule.batch_time == student.batch_time,
         ExamSchedule.scheduled_date == today
@@ -67,6 +97,7 @@ def check_exam_schedule(exam: Exam, student: Student, db: Session) -> tuple[bool
         # Check if there's a future schedule
         future_schedule = db.query(ExamSchedule).filter(
             ExamSchedule.exam_id == exam.id,
+            ExamSchedule.institution_id == student.institution_id,
             ExamSchedule.is_active == True,
             ExamSchedule.batch_time == student.batch_time,
             ExamSchedule.scheduled_date > today
@@ -131,11 +162,14 @@ def get_available_exams(
         return []
 
     # Get all active exams for enrolled courses
+    # Tenant isolation (F-02): global courses share course_ids across
+    # institutions, so exams MUST also be filtered by the student's institution
     exams = db.query(Exam).options(
         joinedload(Exam.course),
         joinedload(Exam.module)
     ).filter(
         Exam.course_id.in_(course_ids),
+        Exam.institution_id == student.institution_id,
         Exam.is_active == True
     ).all()
 
@@ -147,10 +181,11 @@ def get_available_exams(
         # Check schedule
         is_scheduled, schedule, schedule_message = check_exam_schedule(exam, student, db)
 
-        # Check previous attempts
-        attempts = db.query(ExamAttempt).filter(
+        # Check previous attempts (F-02: attempt scoped via institution's exam)
+        attempts = db.query(ExamAttempt).join(Exam).filter(
             ExamAttempt.exam_id == exam.id,
-            ExamAttempt.student_id == student.id
+            ExamAttempt.student_id == student.id,
+            Exam.institution_id == student.institution_id
         ).all()
 
         previous_attempts = len(attempts)
@@ -229,9 +264,14 @@ def start_exam(
     """Start a new exam attempt or resume an existing one"""
     student = get_student_from_user(current_user, db)
 
+    # Tenant isolation (F-02): exam must belong to the student's institution
     exam = db.query(Exam).options(
         joinedload(Exam.questions)
-    ).filter(Exam.id == exam_id, Exam.is_active == True).first()
+    ).filter(
+        Exam.id == exam_id,
+        Exam.institution_id == student.institution_id,
+        Exam.is_active == True
+    ).first()
 
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
@@ -266,26 +306,23 @@ def start_exam(
         # Resume existing attempt
         attempt = existing_attempt
 
-        # Calculate remaining time
-        elapsed = (datetime.now() - attempt.start_time).total_seconds()
-        time_limit = exam.duration_minutes * 60
-        remaining = max(0, time_limit - elapsed)
+        # Server-authoritative deadline (F-13) — never trust client time
+        deadline = _attempt_deadline(attempt, exam)
+        now = _server_now(attempt.start_time)
 
-        if remaining <= 0:
-            # Time expired, auto-submit
-            attempt.status = 'timed_out'
-            attempt.end_time = datetime.now()
-            _calculate_results(attempt, db)
-            db.commit()
+        if now > deadline:
+            # Time expired: grade what exists and time out
+            _expire_attempt(attempt, db)
             raise HTTPException(status_code=400, detail="Exam time has expired")
 
-        attempt.time_remaining_seconds = int(remaining)
+        attempt.time_remaining_seconds = int((deadline - now).total_seconds())
         db.commit()
     else:
-        # Check if can start new attempt
-        completed_attempts = db.query(ExamAttempt).filter(
+        # Check if can start new attempt (F-02: scoped via institution's exam)
+        completed_attempts = db.query(ExamAttempt).join(Exam).filter(
             ExamAttempt.exam_id == exam_id,
             ExamAttempt.student_id == student.id,
+            Exam.institution_id == student.institution_id,
             ExamAttempt.status.in_(['completed', 'submitted', 'timed_out'])
         ).count()
 
@@ -296,10 +333,11 @@ def start_exam(
             if exam.max_retakes > 0 and completed_attempts >= exam.max_retakes:
                 raise HTTPException(status_code=403, detail="Maximum retake attempts reached")
 
-            # Check if retake is allowed by manager
-            last_attempt = db.query(ExamAttempt).filter(
+            # Check if retake is allowed by manager (F-02: institution-scoped)
+            last_attempt = db.query(ExamAttempt).join(Exam).filter(
                 ExamAttempt.exam_id == exam_id,
-                ExamAttempt.student_id == student.id
+                ExamAttempt.student_id == student.id,
+                Exam.institution_id == student.institution_id
             ).order_by(ExamAttempt.created_at.desc()).first()
 
             if last_attempt and not last_attempt.retake_allowed:
@@ -346,13 +384,17 @@ def start_exam(
 
         db.commit()
 
-    # Build question list for response (without correct answers)
+    # Build question list for response using QuestionPublic (F-14):
+    # correct_option and explanation must never reach the student here
     questions_data = []
     question_order = attempt.question_order or []
     answer_order = attempt.answer_order or {}
 
     for i, q_id in enumerate(question_order):
-        question = db.query(Question).filter(Question.id == UUID(q_id)).first()
+        question = db.query(Question).filter(
+            Question.id == UUID(q_id),
+            Question.exam_id == exam.id
+        ).first()
         if not question:
             continue
 
@@ -376,9 +418,10 @@ def start_exam(
             q_data['option_c'] = question.option_c
             q_data['option_d'] = question.option_d
 
-        questions_data.append(q_data)
+        questions_data.append(QuestionPublic(**q_data))
 
-    end_time = attempt.start_time + timedelta(minutes=exam.duration_minutes)
+    # Server-authoritative deadline for the frontend countdown (F-13)
+    deadline = _attempt_deadline(attempt, exam)
 
     return ExamAttemptStart(
         attempt_id=attempt.id,
@@ -387,7 +430,8 @@ def start_exam(
         duration_minutes=exam.duration_minutes,
         total_questions=len(questions_data),
         start_time=attempt.start_time,
-        end_time=end_time,
+        end_time=deadline,
+        deadline=deadline,
         questions=questions_data
     )
 
@@ -403,12 +447,15 @@ def get_attempt_state(
     """Get current state of an exam attempt"""
     student = get_student_from_user(current_user, db)
 
-    attempt = db.query(ExamAttempt).options(
+    # Tenant isolation (F-02): attempt must belong to an exam of the
+    # student's institution
+    attempt = db.query(ExamAttempt).join(Exam).options(
         joinedload(ExamAttempt.exam),
         joinedload(ExamAttempt.answers)
     ).filter(
         ExamAttempt.id == attempt_id,
-        ExamAttempt.student_id == student.id
+        ExamAttempt.student_id == student.id,
+        Exam.institution_id == student.institution_id
     ).first()
 
     if not attempt:
@@ -417,10 +464,10 @@ def get_attempt_state(
     if attempt.status != 'in_progress':
         raise HTTPException(status_code=400, detail=f"Exam is {attempt.status}")
 
-    # Calculate time remaining
-    elapsed = (datetime.now() - attempt.start_time).total_seconds()
-    time_limit = attempt.exam.duration_minutes * 60
-    remaining = max(0, int(time_limit - elapsed))
+    # Server-authoritative time remaining (F-13)
+    deadline = _attempt_deadline(attempt, attempt.exam)
+    now = _server_now(attempt.start_time)
+    remaining = max(0, int((deadline - now).total_seconds()))
 
     # Build answers dict
     answers = {}
@@ -438,6 +485,7 @@ def get_attempt_state(
         current_question_index=0,
         total_questions=len(attempt.question_order or []),
         time_remaining_seconds=remaining,
+        deadline=deadline,
         answers=answers,
         marked_for_review=marked_for_review
     )
@@ -455,11 +503,14 @@ def submit_answer(
     """Submit/save an answer for a question (auto-save)"""
     student = get_student_from_user(current_user, db)
 
-    attempt = db.query(ExamAttempt).options(
+    # Tenant isolation (F-02): attempt must belong to an exam of the
+    # student's institution
+    attempt = db.query(ExamAttempt).join(Exam).options(
         joinedload(ExamAttempt.exam)
     ).filter(
         ExamAttempt.id == attempt_id,
-        ExamAttempt.student_id == student.id
+        ExamAttempt.student_id == student.id,
+        Exam.institution_id == student.institution_id
     ).first()
 
     if not attempt:
@@ -468,13 +519,11 @@ def submit_answer(
     if attempt.status != 'in_progress':
         raise HTTPException(status_code=400, detail=f"Cannot modify {attempt.status} exam")
 
-    # Check time
-    elapsed = (datetime.now() - attempt.start_time).total_seconds()
-    if elapsed > attempt.exam.duration_minutes * 60:
-        attempt.status = 'timed_out'
-        attempt.end_time = datetime.now()
-        _calculate_results(attempt, db)
-        db.commit()
+    # Server-authoritative deadline check (F-13): reject past deadline + grace
+    deadline = _attempt_deadline(attempt, attempt.exam)
+    now = _server_now(attempt.start_time)
+    if now > deadline + timedelta(seconds=EXAM_DEADLINE_GRACE_SECONDS):
+        _expire_attempt(attempt, db)
         raise HTTPException(status_code=400, detail="Exam time has expired")
 
     # Find or create answer record
@@ -500,10 +549,10 @@ def submit_answer(
 
     answer.selected_option = selected
     answer.marked_for_review = answer_data.marked_for_review
-    answer.answered_at = datetime.now()
+    answer.answered_at = now
 
-    # Update time remaining
-    remaining = max(0, int(attempt.exam.duration_minutes * 60 - elapsed))
+    # Update time remaining (display hint only — deadline is authoritative)
+    remaining = max(0, int((deadline - now).total_seconds()))
     attempt.time_remaining_seconds = remaining
 
     db.commit()
@@ -522,12 +571,15 @@ def submit_exam(
     """Submit the exam for grading"""
     student = get_student_from_user(current_user, db)
 
-    attempt = db.query(ExamAttempt).options(
+    # Tenant isolation (F-02): attempt must belong to an exam of the
+    # student's institution
+    attempt = db.query(ExamAttempt).join(Exam).options(
         joinedload(ExamAttempt.exam),
         joinedload(ExamAttempt.answers)
     ).filter(
         ExamAttempt.id == attempt_id,
-        ExamAttempt.student_id == student.id
+        ExamAttempt.student_id == student.id,
+        Exam.institution_id == student.institution_id
     ).first()
 
     if not attempt:
@@ -536,8 +588,15 @@ def submit_exam(
     if attempt.status != 'in_progress':
         raise HTTPException(status_code=400, detail=f"Exam is already {attempt.status}")
 
+    # Server-authoritative deadline check (F-13): reject past deadline + grace
+    deadline = _attempt_deadline(attempt, attempt.exam)
+    now = _server_now(attempt.start_time)
+    if now > deadline + timedelta(seconds=EXAM_DEADLINE_GRACE_SECONDS):
+        _expire_attempt(attempt, db)
+        raise HTTPException(status_code=400, detail="Exam time has expired")
+
     attempt.status = 'submitted'
-    attempt.end_time = datetime.now()
+    attempt.end_time = now
 
     _calculate_results(attempt, db)
 
@@ -605,11 +664,13 @@ def get_my_results(
     """Get all verified exam results for the student"""
     student = get_student_from_user(current_user, db)
 
-    attempts = db.query(ExamAttempt).options(
+    # Tenant isolation (F-02): only attempts on this institution's exams
+    attempts = db.query(ExamAttempt).join(Exam).options(
         joinedload(ExamAttempt.exam).joinedload(Exam.course),
         joinedload(ExamAttempt.exam).joinedload(Exam.module)
     ).filter(
         ExamAttempt.student_id == student.id,
+        Exam.institution_id == student.institution_id,
         ExamAttempt.is_verified == True
     ).order_by(ExamAttempt.created_at.desc()).all()
 

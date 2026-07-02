@@ -9,23 +9,38 @@ from app.models.student import Student
 from app.models.certificate import Certificate
 from app.models.student_course import StudentCourse
 from app.schemas.payroll import CertificateGenerate, CertificateResponse
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_roles, check_resource_access
 
 router = APIRouter()
+
+# Roles allowed to generate/manage certificates (F-01)
+CERTIFICATE_MANAGER_ROLES = ["super_admin", "institution_director", "staff_manager"]
+
+
+def _get_own_student_record(user: User, db: Session) -> Student:
+    """Get the student record for a student-role user (404 if none)."""
+    student = db.query(Student).filter(Student.user_id == user.id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student record not found")
+    return student
 
 
 @router.post("/generate")
 def generate_certificate(
     cert_data: CertificateGenerate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles(CERTIFICATE_MANAGER_ROLES)),
     db: Session = Depends(get_db)
 ):
-    """Generate certificate for a student"""
+    """Generate certificate for a student (managers only, own institution)"""
     # Verify student exists
     student = db.query(Student).filter(Student.id == cert_data.student_id).first()
 
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
+
+    # Tenant isolation (F-01): target student must belong to the caller's
+    # institution (super_admin exempt inside check_resource_access)
+    check_resource_access(current_user, student.institution_id)
 
     # Check if student completed the course
     enrollment = db.query(StudentCourse).filter(
@@ -86,11 +101,16 @@ def list_certificates(
     db: Session = Depends(get_db)
 ):
     """List certificates with optional filters"""
-    query = db.query(Certificate)
+    query = db.query(Certificate).join(Student, Certificate.student_id == Student.id)
 
-    # Filter by institution
+    # Tenant isolation (F-01): non-super-admins only see their institution
     if current_user.role != "super_admin":
-        query = query.join(Student).filter(Student.institution_id == current_user.institution_id)
+        query = query.filter(Student.institution_id == current_user.institution_id)
+
+    # Students may only list their own certificates
+    if current_user.role == "student":
+        own = _get_own_student_record(current_user, db)
+        query = query.filter(Certificate.student_id == own.id)
 
     if student_id:
         query = query.filter(Certificate.student_id == student_id)
@@ -114,5 +134,16 @@ def get_certificate(
 
     if not certificate:
         raise HTTPException(status_code=404, detail="Certificate not found")
+
+    # Tenant isolation (F-01): certificate's student must be in caller's institution
+    student = db.query(Student).filter(Student.id == certificate.student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+
+    check_resource_access(current_user, student.institution_id)
+
+    # Students may only view their own certificates
+    if current_user.role == "student" and student.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied to this certificate")
 
     return certificate
