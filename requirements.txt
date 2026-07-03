@@ -25,3 +25,7 @@ pydantic[email]
 # Production dependencies (install when moving to production)
 # supabase==2.0.3
 # cloudinary==1.36.0
+
+# Dev / test dependencies
+pytest==7.4.3
+httpx==0.25.1

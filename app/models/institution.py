@@ -37,7 +37,15 @@ class Institution(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
-    users = relationship("User", foreign_keys="User.institution_id", back_populates="institution")
+    # passive_deletes="all": never NULL-out users.institution_id on delete —
+    # the DB FK ON DELETE CASCADE removes the users (the CHECK constraint
+    # forbids a non-super_admin user without an institution).
+    users = relationship(
+        "User",
+        foreign_keys="User.institution_id",
+        back_populates="institution",
+        passive_deletes="all",
+    )
     students = relationship("Student", back_populates="institution", cascade="all, delete-orphan")
     courses = relationship("Course", back_populates="institution", cascade="all, delete-orphan")
     staff = relationship("Staff", back_populates="institution", cascade="all, delete-orphan")

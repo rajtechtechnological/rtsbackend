@@ -1,7 +1,17 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
 from uuid import UUID
+
+# Canonical 6-role enum (docs/01 §3, F-06) — enforced here AND by the DB CHECK.
+Role = Literal[
+    "super_admin",
+    "institution_director",
+    "staff_manager",
+    "receptionist",
+    "staff",
+    "student",
+]
 
 
 # Base schema with common fields
@@ -9,11 +19,11 @@ class UserBase(BaseModel):
     email: EmailStr
     full_name: str
     phone: Optional[str] = None
-    role: str  # super_admin, institution_director, staff_manager, staff, student
+    role: Role
     institution_id: Optional[UUID] = None
 
 
-# Schema for creating a user (signup)
+# Schema for creating a user (super_admin only — no public signup)
 class UserCreate(UserBase):
     password: str
 

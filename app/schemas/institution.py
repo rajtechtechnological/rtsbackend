@@ -1,33 +1,38 @@
-from pydantic import BaseModel, EmailStr
-from typing import Optional
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional, Literal
 from datetime import datetime
 from uuid import UUID
 
 
 class InstitutionBase(BaseModel):
-    name: str
-    district_code: Optional[str] = None  # e.g., NAL, PAT, GAY
+    name: str = Field(..., min_length=1)
+    district_code: str = Field(..., min_length=2, max_length=8)  # e.g. NAL, PAT
+    code: str = Field(..., min_length=2, max_length=8)  # short code for IDs, e.g. RCC
     address: Optional[str] = None
     contact_email: Optional[EmailStr] = None
     contact_phone: Optional[str] = None
 
 
 class InstitutionCreate(InstitutionBase):
-    director_id: Optional[UUID] = None
+    pass
 
 
 class InstitutionUpdate(BaseModel):
+    # district_code / code are intentionally NOT updatable: they are baked
+    # into issued student/receipt/certificate IDs.
     name: Optional[str] = None
-    district_code: Optional[str] = None
     address: Optional[str] = None
     contact_email: Optional[EmailStr] = None
     contact_phone: Optional[str] = None
-    director_id: Optional[UUID] = None
+
+
+class InstitutionStatusUpdate(BaseModel):
+    status: Literal["active", "suspended"]
 
 
 class InstitutionResponse(InstitutionBase):
     id: UUID
-    director_id: Optional[UUID] = None
+    status: str
     created_at: datetime
     updated_at: Optional[datetime] = None
 

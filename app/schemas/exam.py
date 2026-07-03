@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from datetime import date, datetime, time
 from uuid import UUID
 
@@ -8,6 +8,7 @@ from uuid import UUID
 
 class QuestionBase(BaseModel):
     question_text: str = Field(..., min_length=1)
+    image_url: Optional[str] = None  # optional question image (Storage URL)
     option_a: str = Field(..., min_length=1)
     option_b: str = Field(..., min_length=1)
     option_c: str = Field(..., min_length=1)
@@ -23,6 +24,7 @@ class QuestionCreate(QuestionBase):
 
 class QuestionUpdate(BaseModel):
     question_text: Optional[str] = None
+    image_url: Optional[str] = None
     option_a: Optional[str] = None
     option_b: Optional[str] = None
     option_c: Optional[str] = None
@@ -62,6 +64,7 @@ class QuestionPublic(BaseModel):
     id: UUID
     index: Optional[int] = None
     question_text: str
+    image_url: Optional[str] = None
     marks: int
     option_a: str
     option_b: str
@@ -84,20 +87,14 @@ class ExamBase(BaseModel):
     shuffle_questions: bool = True
     shuffle_options: bool = True
     show_result_immediately: bool = False
-    # Batch targeting
-    batch_time: Optional[str] = None  # e.g., "9AM-10AM"
-    batch_month: Optional[str] = None  # MM format
-    batch_year: Optional[str] = None  # YYYY format
-    batch_identifier: Optional[str] = None  # "A" or "B"
 
 
 class ExamCreate(ExamBase):
     course_id: UUID
     module_id: UUID
-    batch_time: str  # Required for exam creation
-    batch_month: str  # Required
-    batch_year: str  # Required
-    batch_identifier: Optional[str] = None  # Optional A/B
+    # F-04: exams are ALWAYS institution-owned. Honored ONLY for super_admin
+    # (who must pick one); tenant users always get their own institution.
+    institution_id: Optional[UUID] = None
 
 
 class ExamUpdate(BaseModel):
@@ -105,7 +102,7 @@ class ExamUpdate(BaseModel):
     description: Optional[str] = None
     passing_marks: Optional[int] = Field(None, ge=0, le=100)
     duration_minutes: Optional[int] = Field(None, ge=1, le=480)
-    is_active: Optional[bool] = None
+    is_active: Optional[bool] = None  # publishing requires staff_manager+
     allow_retakes: Optional[bool] = None
     max_retakes: Optional[int] = Field(None, ge=0)
     shuffle_questions: Optional[bool] = None
@@ -138,10 +135,7 @@ class ExamDetailResponse(ExamResponse):
 # ============ Exam Schedule Schemas ============
 
 class ExamScheduleBase(BaseModel):
-    batch_time: str  # e.g., "9AM-10AM"
-    batch_identifier: Optional[str] = None  # 'A' or 'B'
-    batch_month: Optional[str] = None  # MM format
-    batch_year: Optional[str] = None  # YYYY format
+    batch_id: UUID  # a schedule targets exactly one batch (F-08)
     scheduled_date: date
     start_time: time
     end_time: time
@@ -168,6 +162,7 @@ class ExamScheduleDetailResponse(ExamScheduleResponse):
     exam_title: Optional[str] = None
     course_name: Optional[str] = None
     module_name: Optional[str] = None
+    batch_name: Optional[str] = None
 
 
 # ============ Student Answer Schemas ============
@@ -202,9 +197,9 @@ class ExamAttemptStart(BaseModel):
     duration_minutes: int
     total_questions: int
     start_time: datetime
-    end_time: datetime  # Calculated: start_time + duration
-    deadline: datetime  # Server-authoritative: start_time + duration (F-13)
-    questions: List[QuestionPublic]  # Shuffled questions, no correct answers (F-14)
+    end_time: datetime  # = deadline (kept for backward compat)
+    deadline: datetime  # server-authoritative deadline_at (F-13)
+    questions: List[QuestionPublic]  # shuffled questions, no correct answers (F-14)
 
 
 class ExamAttemptState(BaseModel):
@@ -215,10 +210,10 @@ class ExamAttemptState(BaseModel):
     status: str
     current_question_index: int
     total_questions: int
-    time_remaining_seconds: int  # Display hint only — deadline is authoritative
-    deadline: datetime  # Server-authoritative: start_time + duration (F-13)
+    time_remaining_seconds: int  # display hint only — deadline is authoritative
+    deadline: datetime  # server-authoritative deadline_at (F-13)
     answers: Dict[str, Optional[str]]  # question_id -> selected_option
-    marked_for_review: List[str]  # List of question_ids marked for review
+    marked_for_review: List[str]
 
 
 class ExamAttemptResponse(BaseModel):
@@ -228,6 +223,7 @@ class ExamAttemptResponse(BaseModel):
     attempt_number: int
     status: str
     start_time: datetime
+    deadline_at: datetime
     end_time: Optional[datetime] = None
     total_marks: Optional[int] = None
     obtained_marks: Optional[int] = None
@@ -302,7 +298,7 @@ class AvailableExamResponse(BaseModel):
     duration_minutes: int
     passing_marks: int
     is_locked: bool
-    lock_reason: Optional[str] = None  # e.g., "Payment pending", "Not scheduled"
+    lock_reason: Optional[str] = None  # e.g. "Payment pending", "Not scheduled"
     schedule_id: Optional[UUID] = None
     scheduled_date: Optional[date] = None
     start_time: Optional[time] = None

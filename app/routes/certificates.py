@@ -1,149 +1,130 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from typing import List
+"""
+Certificates. Manager-only generation (F-01), tenant-scoped via the
+denormalized institution_id, collision-free numbering via id_counters
+(docs/02 §6). No stored PDFs — certificates are rendered on demand.
+"""
+
+import secrets
+from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional
 from uuid import UUID
 from datetime import date
-from app.database import get_db
-from app.models.user import User
-from app.models.student import Student
+
+from app.dependencies import require_roles, MANAGER_ROLES, ALL_ROLES
+from app import ids
 from app.models.certificate import Certificate
+from app.models.institution import Institution
+from app.models.student import Student
 from app.models.student_course import StudentCourse
 from app.schemas.payroll import CertificateGenerate, CertificateResponse
-from app.dependencies import get_current_user, require_roles, check_resource_access
+from app.tenancy import TenantContext, get_tenant
 
 router = APIRouter()
 
-# Roles allowed to generate/manage certificates (F-01)
-CERTIFICATE_MANAGER_ROLES = ["super_admin", "institution_director", "staff_manager"]
 
-
-def _get_own_student_record(user: User, db: Session) -> Student:
-    """Get the student record for a student-role user (404 if none)."""
-    student = db.query(Student).filter(Student.user_id == user.id).first()
+def _own_student_row(ctx: TenantContext) -> Student:
+    student = ctx.q(Student).filter(Student.user_id == ctx.user.id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student record not found")
     return student
 
 
-@router.post("/generate")
+@router.post(
+    "/generate",
+    response_model=CertificateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_roles(MANAGER_ROLES))],
+)
 def generate_certificate(
     cert_data: CertificateGenerate,
-    current_user: User = Depends(require_roles(CERTIFICATE_MANAGER_ROLES)),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Generate certificate for a student (managers only, own institution)"""
-    # Verify student exists
-    student = db.query(Student).filter(Student.id == cert_data.student_id).first()
-
+    """Generate a certificate for a student (managers only, own institution)."""
+    # Tenant isolation (F-01): student fetched via ctx.q — out-of-tenant = 404
+    student = ctx.q(Student).filter(Student.id == cert_data.student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    # Tenant isolation (F-01): target student must belong to the caller's
-    # institution (super_admin exempt inside check_resource_access)
-    check_resource_access(current_user, student.institution_id)
-
-    # Check if student completed the course
-    enrollment = db.query(StudentCourse).filter(
-        StudentCourse.student_id == cert_data.student_id,
-        StudentCourse.course_id == cert_data.course_id
+    enrollment = ctx.db.query(StudentCourse).filter(
+        StudentCourse.student_id == student.id,
+        StudentCourse.course_id == cert_data.course_id,
     ).first()
-
     if not enrollment:
         raise HTTPException(status_code=400, detail="Student not enrolled in this course")
-
     if enrollment.status != "completed":
         raise HTTPException(status_code=400, detail="Course not yet completed")
 
-    # Check if certificate already exists
-    existing_cert = db.query(Certificate).filter(
-        Certificate.student_id == cert_data.student_id,
-        Certificate.course_id == cert_data.course_id
+    existing_cert = ctx.db.query(Certificate).filter(
+        Certificate.student_id == student.id,
+        Certificate.course_id == cert_data.course_id,
     ).first()
-
     if existing_cert:
         raise HTTPException(status_code=400, detail="Certificate already generated")
 
-    # Generate unique certificate number
-    year = date.today().year
-    count = db.query(Certificate).filter(
-        Certificate.course_id == cert_data.course_id
-    ).count() + 1
+    institution = ctx.db.query(Institution).filter(
+        Institution.id == student.institution_id
+    ).first()
 
-    cert_number = f"CERT-{year}-{count:04d}"
-
-    # TODO: Generate PDF certificate using ReportLab
-    # For now, use placeholder URL
-    cert_url = f"/certificates/{cert_number}.pdf"
+    # Atomic, institution-scoped, never reused (F-05):
+    # RTS-{DIST}-{INST}-CERT-{YYYY}-{NNNN}
+    cert_number = ids.certificate_number(ctx.db, institution, date.today().year)
 
     new_certificate = Certificate(
-        student_id=cert_data.student_id,
+        institution_id=student.institution_id,
+        student_id=student.id,
         course_id=cert_data.course_id,
-        certificate_url=cert_url,
-        certificate_number=cert_number
+        certificate_number=cert_number,
+        verification_code=secrets.token_urlsafe(16),
     )
 
-    db.add(new_certificate)
-    db.commit()
-    db.refresh(new_certificate)
-
-    return {
-        "message": "Certificate generated successfully",
-        "certificate_number": cert_number,
-        "certificate_url": cert_url
-    }
+    ctx.db.add(new_certificate)
+    ctx.db.commit()
+    ctx.db.refresh(new_certificate)
+    return new_certificate
 
 
-@router.get("/", response_model=List[CertificateResponse])
+@router.get(
+    "/",
+    response_model=List[CertificateResponse],
+    dependencies=[Depends(require_roles(ALL_ROLES))],
+)
 def list_certificates(
-    student_id: UUID = None,
-    course_id: UUID = None,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    student_id: Optional[UUID] = None,
+    course_id: Optional[UUID] = None,
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """List certificates with optional filters"""
-    query = db.query(Certificate).join(Student, Certificate.student_id == Student.id)
+    """List certificates. Tenant-scoped; students only ever see their own."""
+    query = ctx.q(Certificate)
 
-    # Tenant isolation (F-01): non-super-admins only see their institution
-    if current_user.role != "super_admin":
-        query = query.filter(Student.institution_id == current_user.institution_id)
-
-    # Students may only list their own certificates
-    if current_user.role == "student":
-        own = _get_own_student_record(current_user, db)
+    if ctx.user.role == "student":
+        own = _own_student_row(ctx)
         query = query.filter(Certificate.student_id == own.id)
 
     if student_id:
         query = query.filter(Certificate.student_id == student_id)
-
     if course_id:
         query = query.filter(Certificate.course_id == course_id)
 
-    certificates = query.order_by(Certificate.created_at.desc()).all()
-
-    return certificates
+    return query.order_by(Certificate.created_at.desc()).all()
 
 
-@router.get("/{certificate_id}", response_model=CertificateResponse)
+@router.get(
+    "/{certificate_id}",
+    response_model=CertificateResponse,
+    dependencies=[Depends(require_roles(ALL_ROLES))],
+)
 def get_certificate(
     certificate_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Get certificate details"""
-    certificate = db.query(Certificate).filter(Certificate.id == certificate_id).first()
-
+    certificate = ctx.q(Certificate).filter(Certificate.id == certificate_id).first()
     if not certificate:
         raise HTTPException(status_code=404, detail="Certificate not found")
 
-    # Tenant isolation (F-01): certificate's student must be in caller's institution
-    student = db.query(Student).filter(Student.id == certificate.student_id).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Certificate not found")
-
-    check_resource_access(current_user, student.institution_id)
-
-    # Students may only view their own certificates
-    if current_user.role == "student" and student.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied to this certificate")
+    if ctx.user.role == "student":
+        own = _own_student_row(ctx)
+        if certificate.student_id != own.id:
+            # Own-records-only: someone else's certificate is a 404
+            raise HTTPException(status_code=404, detail="Certificate not found")
 
     return certificate

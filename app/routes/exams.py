@@ -1,62 +1,96 @@
+"""
+Exam management. Tenant-scoped via ctx.q(Exam) (F-02/F-04). Per the
+permission matrix (docs/01 §3): staff may author exams/questions, but
+publishing an exam (is_active) and scheduling require staff_manager+.
+Batch targeting lives ONLY on exam_schedules (one row per batch, F-08).
+"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import joinedload
 from sqlalchemy import func
 from typing import List, Optional
 from uuid import UUID
-from app.database import get_db
-from app.models.user import User
-from app.models.exam import Exam, Question, ExamSchedule
+
+from app.dependencies import require_roles, MANAGER_ROLES, EXAM_AUTHOR_ROLES
+from app.models.batch import Batch
 from app.models.course import Course
 from app.models.course_module import CourseModule
+from app.models.exam import Exam, Question, ExamSchedule
 from app.schemas.exam import (
     ExamCreate, ExamUpdate, ExamResponse, ExamDetailResponse,
     QuestionCreate, QuestionUpdate, QuestionResponse, QuestionBulkCreate,
-    ExamScheduleCreate, ExamScheduleResponse, ExamScheduleDetailResponse
+    ExamScheduleCreate, ExamScheduleResponse, ExamScheduleDetailResponse,
 )
-from app.dependencies import get_current_user, check_resource_access
+from app.tenancy import TenantContext, get_tenant
 
 router = APIRouter()
 
-MANAGER_ROLES = ["super_admin", "institution_director", "staff_manager"]
+
+def _get_exam_or_404(ctx: TenantContext, exam_id: UUID, options=()) -> Exam:
+    query = ctx.q(Exam)
+    for opt in options:
+        query = query.options(opt)
+    exam = query.filter(Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    return exam
 
 
-def require_manager(user: User):
-    """Ensure user has manager-level access"""
-    if user.role not in MANAGER_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only managers can access this resource"
-        )
+def _get_question_scoped(ctx: TenantContext, question_id: UUID) -> Question:
+    """Question scoped through its parent exam (questions carry no
+    institution_id of their own)."""
+    question = (
+        ctx.db.query(Question)
+        .join(Exam, Question.exam_id == Exam.id)
+        .options(joinedload(Question.exam))
+        .filter(Question.id == question_id)
+    )
+    if ctx.institution_id is not None:
+        question = question.filter(Exam.institution_id == ctx.institution_id)
+    question = question.first()
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found")
+    return question
+
+
+def _refresh_question_count(ctx: TenantContext, exam: Exam) -> None:
+    exam.total_questions = ctx.db.query(func.count(Question.id)).filter(
+        Question.exam_id == exam.id,
+        Question.is_active == True,  # noqa: E712
+    ).scalar() or 0
 
 
 # ============ Exam CRUD ============
 
-@router.post("/", response_model=ExamResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/",
+    response_model=ExamResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_roles(EXAM_AUTHOR_ROLES))],
+)
 def create_exam(
     exam_data: ExamCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Create a new exam for a course module"""
-    require_manager(current_user)
+    """Create an exam for a course module. Exams are ALWAYS institution-owned
+    (F-04): tenant users get their own institution; super_admin must pass
+    institution_id. Staff-authored exams start unpublished."""
+    institution_id = ctx.require_institution_id(exam_data.institution_id)
 
-    # Verify course exists and get institution
-    course = db.query(Course).filter(Course.id == exam_data.course_id).first()
+    # Course must be global or owned by the target institution
+    course = ctx.db.query(Course).filter(
+        Course.id == exam_data.course_id,
+        (Course.institution_id == institution_id) | (Course.institution_id.is_(None)),
+    ).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
 
-    # Verify module exists and belongs to course
-    module = db.query(CourseModule).filter(
+    module = ctx.db.query(CourseModule).filter(
         CourseModule.id == exam_data.module_id,
-        CourseModule.course_id == exam_data.course_id
+        CourseModule.course_id == exam_data.course_id,
     ).first()
     if not module:
         raise HTTPException(status_code=404, detail="Module not found or doesn't belong to this course")
-
-    # Determine institution_id
-    institution_id = course.institution_id or current_user.institution_id
-    if institution_id and current_user.role != "super_admin":
-        check_resource_access(current_user, institution_id)
 
     new_exam = Exam(
         course_id=exam_data.course_id,
@@ -71,36 +105,30 @@ def create_exam(
         shuffle_questions=exam_data.shuffle_questions,
         shuffle_options=exam_data.shuffle_options,
         show_result_immediately=exam_data.show_result_immediately,
-        batch_time=exam_data.batch_time,
-        batch_month=exam_data.batch_month,
-        batch_year=exam_data.batch_year,
-        batch_identifier=exam_data.batch_identifier,
-        created_by=current_user.id
+        # Publishing requires staff_manager+ — staff authors start unpublished
+        is_active=ctx.user.role in MANAGER_ROLES,
+        created_by=ctx.user.id,
     )
 
-    db.add(new_exam)
-    db.commit()
-    db.refresh(new_exam)
-
+    ctx.db.add(new_exam)
+    ctx.db.commit()
+    ctx.db.refresh(new_exam)
     return new_exam
 
 
-@router.get("/", response_model=List[ExamResponse])
+@router.get(
+    "/",
+    response_model=List[ExamResponse],
+    dependencies=[Depends(require_roles(EXAM_AUTHOR_ROLES))],
+)
 def list_exams(
     course_id: Optional[UUID] = None,
     module_id: Optional[UUID] = None,
     is_active: Optional[bool] = None,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """List all exams with optional filters"""
-    require_manager(current_user)
-
-    query = db.query(Exam)
-
-    # Filter by institution
-    if current_user.role != "super_admin":
-        query = query.filter(Exam.institution_id == current_user.institution_id)
+    """List exams in the caller's institution."""
+    query = ctx.q(Exam)
 
     if course_id:
         query = query.filter(Exam.course_id == course_id)
@@ -109,33 +137,144 @@ def list_exams(
     if is_active is not None:
         query = query.filter(Exam.is_active == is_active)
 
-    exams = query.order_by(Exam.created_at.desc()).all()
-    return exams
+    return query.order_by(Exam.created_at.desc()).all()
 
 
-@router.get("/{exam_id}", response_model=ExamDetailResponse)
+# ============ Exam Scheduling ============
+
+@router.post(
+    "/schedules",
+    response_model=ExamScheduleResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_roles(MANAGER_ROLES))],
+)
+def schedule_exam(
+    schedule_data: ExamScheduleCreate,
+    ctx: TenantContext = Depends(get_tenant),
+):
+    """Schedule an exam for exactly one batch (staff_manager+)."""
+    exam = _get_exam_or_404(ctx, schedule_data.exam_id)
+
+    # The batch must belong to the exam's institution
+    batch = ctx.db.query(Batch).filter(
+        Batch.id == schedule_data.batch_id,
+        Batch.institution_id == exam.institution_id,
+    ).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    duplicate = ctx.db.query(ExamSchedule).filter(
+        ExamSchedule.exam_id == exam.id,
+        ExamSchedule.batch_id == batch.id,
+        ExamSchedule.scheduled_date == schedule_data.scheduled_date,
+    ).first()
+    if duplicate:
+        raise HTTPException(
+            status_code=409,
+            detail="This exam is already scheduled for this batch on this date",
+        )
+
+    new_schedule = ExamSchedule(
+        exam_id=exam.id,
+        institution_id=exam.institution_id,
+        batch_id=batch.id,
+        scheduled_date=schedule_data.scheduled_date,
+        start_time=schedule_data.start_time,
+        end_time=schedule_data.end_time,
+        created_by=ctx.user.id,
+    )
+
+    ctx.db.add(new_schedule)
+    ctx.db.commit()
+    ctx.db.refresh(new_schedule)
+    return new_schedule
+
+
+@router.get(
+    "/schedules",
+    response_model=List[ExamScheduleDetailResponse],
+    dependencies=[Depends(require_roles(EXAM_AUTHOR_ROLES))],
+)
+def list_schedules(
+    exam_id: Optional[UUID] = None,
+    batch_id: Optional[UUID] = None,
+    scheduled_date: Optional[str] = None,
+    ctx: TenantContext = Depends(get_tenant),
+):
+    """List exam schedules in the caller's institution."""
+    query = ctx.q(ExamSchedule).options(
+        joinedload(ExamSchedule.exam).joinedload(Exam.course),
+        joinedload(ExamSchedule.exam).joinedload(Exam.module),
+        joinedload(ExamSchedule.batch),
+    )
+
+    if exam_id:
+        query = query.filter(ExamSchedule.exam_id == exam_id)
+    if batch_id:
+        query = query.filter(ExamSchedule.batch_id == batch_id)
+    if scheduled_date:
+        query = query.filter(ExamSchedule.scheduled_date == scheduled_date)
+
+    schedules = query.filter(ExamSchedule.is_active == True).order_by(  # noqa: E712
+        ExamSchedule.scheduled_date.desc(),
+        ExamSchedule.start_time,
+    ).all()
+
+    return [
+        ExamScheduleDetailResponse(
+            id=s.id,
+            exam_id=s.exam_id,
+            institution_id=s.institution_id,
+            batch_id=s.batch_id,
+            scheduled_date=s.scheduled_date,
+            start_time=s.start_time,
+            end_time=s.end_time,
+            is_active=s.is_active,
+            created_by=s.created_by,
+            created_at=s.created_at,
+            exam_title=s.exam.title if s.exam else None,
+            course_name=s.exam.course.name if s.exam and s.exam.course else None,
+            module_name=s.exam.module.module_name if s.exam and s.exam.module else None,
+            batch_name=s.batch.name if s.batch else None,
+        )
+        for s in schedules
+    ]
+
+
+@router.delete(
+    "/schedules/{schedule_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_roles(MANAGER_ROLES))],
+)
+def cancel_schedule(
+    schedule_id: UUID,
+    ctx: TenantContext = Depends(get_tenant),
+):
+    schedule = ctx.q(ExamSchedule).filter(ExamSchedule.id == schedule_id).first()
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    schedule.is_active = False
+    ctx.db.commit()
+    return None
+
+
+@router.get(
+    "/{exam_id}",
+    response_model=ExamDetailResponse,
+    dependencies=[Depends(require_roles(EXAM_AUTHOR_ROLES))],
+)
 def get_exam(
     exam_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Get exam details with questions"""
-    require_manager(current_user)
+    """Exam details with questions (manager/author view — includes answers)."""
+    exam = _get_exam_or_404(
+        ctx, exam_id,
+        options=(joinedload(Exam.questions), joinedload(Exam.course), joinedload(Exam.module)),
+    )
 
-    exam = db.query(Exam).options(
-        joinedload(Exam.questions),
-        joinedload(Exam.course),
-        joinedload(Exam.module)
-    ).filter(Exam.id == exam_id).first()
-
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
-
-    if current_user.role != "super_admin":
-        check_resource_access(current_user, exam.institution_id)
-
-    # Build response with additional info
-    response = ExamDetailResponse(
+    return ExamDetailResponse(
         id=exam.id,
         course_id=exam.course_id,
         module_id=exam.module_id,
@@ -156,89 +295,78 @@ def get_exam(
         updated_at=exam.updated_at,
         questions=[QuestionResponse.model_validate(q) for q in exam.questions if q.is_active],
         course_name=exam.course.name if exam.course else None,
-        module_name=exam.module.module_name if exam.module else None
+        module_name=exam.module.module_name if exam.module else None,
     )
 
-    return response
 
-
-@router.patch("/{exam_id}", response_model=ExamResponse)
+@router.patch(
+    "/{exam_id}",
+    response_model=ExamResponse,
+    dependencies=[Depends(require_roles(EXAM_AUTHOR_ROLES))],
+)
 def update_exam(
     exam_id: UUID,
     update_data: ExamUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Update exam details"""
-    require_manager(current_user)
+    exam = _get_exam_or_404(ctx, exam_id)
 
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
+    changes = update_data.model_dump(exclude_unset=True)
 
-    if current_user.role != "super_admin":
-        check_resource_access(current_user, exam.institution_id)
+    # Publishing gate: making an exam visible/schedulable needs staff_manager+
+    if "is_active" in changes and ctx.user.role not in MANAGER_ROLES:
+        raise HTTPException(
+            status_code=403,
+            detail="Publishing an exam requires staff_manager or above",
+        )
 
-    for key, value in update_data.model_dump(exclude_unset=True).items():
+    for key, value in changes.items():
         setattr(exam, key, value)
 
-    db.commit()
-    db.refresh(exam)
-
+    ctx.db.commit()
+    ctx.db.refresh(exam)
     return exam
 
 
-@router.delete("/{exam_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{exam_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_roles(MANAGER_ROLES))],
+)
 def delete_exam(
     exam_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Delete an exam"""
-    require_manager(current_user)
-
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
-
-    if current_user.role != "super_admin":
-        check_resource_access(current_user, exam.institution_id)
-
-    db.delete(exam)
-    db.commit()
-
+    exam = _get_exam_or_404(ctx, exam_id)
+    ctx.db.delete(exam)
+    ctx.db.commit()
     return None
 
 
 # ============ Question Management ============
 
-@router.post("/{exam_id}/questions", response_model=QuestionResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{exam_id}/questions",
+    response_model=QuestionResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_roles(EXAM_AUTHOR_ROLES))],
+)
 def add_question(
     exam_id: UUID,
     question_data: QuestionCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Add a question to an exam"""
-    require_manager(current_user)
+    exam = _get_exam_or_404(ctx, exam_id)
 
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
-
-    if current_user.role != "super_admin":
-        check_resource_access(current_user, exam.institution_id)
-
-    # Get next order index
-    max_order = db.query(func.max(Question.order_index)).filter(
-        Question.exam_id == exam_id
+    max_order = ctx.db.query(func.max(Question.order_index)).filter(
+        Question.exam_id == exam.id
     ).scalar() or 0
-
     order_index = question_data.order_index if question_data.order_index is not None else max_order + 1
 
     new_question = Question(
-        exam_id=exam_id,
+        exam_id=exam.id,
         question_text=question_data.question_text,
+        image_url=question_data.image_url,
         option_a=question_data.option_a,
         option_b=question_data.option_b,
         option_c=question_data.option_c,
@@ -246,52 +374,41 @@ def add_question(
         correct_option=question_data.correct_option.upper(),
         marks=question_data.marks,
         explanation=question_data.explanation,
-        order_index=order_index
+        order_index=order_index,
     )
+    ctx.db.add(new_question)
+    ctx.db.flush()
 
-    db.add(new_question)
-
-    # Update exam total questions count
-    exam.total_questions = db.query(func.count(Question.id)).filter(
-        Question.exam_id == exam_id,
-        Question.is_active == True
-    ).scalar() + 1
-
-    db.commit()
-    db.refresh(new_question)
-
+    _refresh_question_count(ctx, exam)
+    ctx.db.commit()
+    ctx.db.refresh(new_question)
     return new_question
 
 
-@router.post("/{exam_id}/questions/bulk", response_model=List[QuestionResponse], status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{exam_id}/questions/bulk",
+    response_model=List[QuestionResponse],
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_roles(EXAM_AUTHOR_ROLES))],
+)
 def add_questions_bulk(
     exam_id: UUID,
     bulk_data: QuestionBulkCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Add multiple questions to an exam at once"""
-    require_manager(current_user)
+    exam = _get_exam_or_404(ctx, exam_id)
 
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
-
-    if current_user.role != "super_admin":
-        check_resource_access(current_user, exam.institution_id)
-
-    # Get starting order index
-    max_order = db.query(func.max(Question.order_index)).filter(
-        Question.exam_id == exam_id
+    max_order = ctx.db.query(func.max(Question.order_index)).filter(
+        Question.exam_id == exam.id
     ).scalar() or 0
 
     created_questions = []
     for i, q_data in enumerate(bulk_data.questions):
         order_index = q_data.order_index if q_data.order_index is not None else max_order + i + 1
-
         new_question = Question(
-            exam_id=exam_id,
+            exam_id=exam.id,
             question_text=q_data.question_text,
+            image_url=q_data.image_url,
             option_a=q_data.option_a,
             option_b=q_data.option_b,
             option_c=q_data.option_c,
@@ -299,233 +416,79 @@ def add_questions_bulk(
             correct_option=q_data.correct_option.upper(),
             marks=q_data.marks,
             explanation=q_data.explanation,
-            order_index=order_index
+            order_index=order_index,
         )
-        db.add(new_question)
+        ctx.db.add(new_question)
         created_questions.append(new_question)
 
-    # Update exam total questions count
-    exam.total_questions = db.query(func.count(Question.id)).filter(
-        Question.exam_id == exam_id,
-        Question.is_active == True
-    ).scalar() + len(bulk_data.questions)
-
-    db.commit()
+    ctx.db.flush()
+    _refresh_question_count(ctx, exam)
+    ctx.db.commit()
 
     for q in created_questions:
-        db.refresh(q)
-
+        ctx.db.refresh(q)
     return created_questions
 
 
-@router.get("/{exam_id}/questions", response_model=List[QuestionResponse])
+@router.get(
+    "/{exam_id}/questions",
+    response_model=List[QuestionResponse],
+    dependencies=[Depends(require_roles(EXAM_AUTHOR_ROLES))],
+)
 def get_exam_questions(
     exam_id: UUID,
     include_inactive: bool = False,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Get all questions for an exam"""
-    require_manager(current_user)
+    exam = _get_exam_or_404(ctx, exam_id)
 
-    exam = db.query(Exam).filter(Exam.id == exam_id).first()
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
-
-    if current_user.role != "super_admin":
-        check_resource_access(current_user, exam.institution_id)
-
-    query = db.query(Question).filter(Question.exam_id == exam_id)
+    query = ctx.db.query(Question).filter(Question.exam_id == exam.id)
     if not include_inactive:
-        query = query.filter(Question.is_active == True)
+        query = query.filter(Question.is_active == True)  # noqa: E712
 
-    questions = query.order_by(Question.order_index).all()
-    return questions
+    return query.order_by(Question.order_index).all()
 
 
-@router.patch("/questions/{question_id}", response_model=QuestionResponse)
+@router.patch(
+    "/questions/{question_id}",
+    response_model=QuestionResponse,
+    dependencies=[Depends(require_roles(EXAM_AUTHOR_ROLES))],
+)
 def update_question(
     question_id: UUID,
     update_data: QuestionUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Update a question"""
-    require_manager(current_user)
+    question = _get_question_scoped(ctx, question_id)
 
-    question = db.query(Question).options(
-        joinedload(Question.exam)
-    ).filter(Question.id == question_id).first()
-
-    if not question:
-        raise HTTPException(status_code=404, detail="Question not found")
-
-    if current_user.role != "super_admin":
-        check_resource_access(current_user, question.exam.institution_id)
-
-    for key, value in update_data.model_dump(exclude_unset=True).items():
+    changes = update_data.model_dump(exclude_unset=True)
+    for key, value in changes.items():
         if key == "correct_option" and value:
             value = value.upper()
         setattr(question, key, value)
 
-    db.commit()
-    db.refresh(question)
+    if "is_active" in changes:
+        _refresh_question_count(ctx, question.exam)
 
-    # Update exam question count if active status changed
-    if "is_active" in update_data.model_dump(exclude_unset=True):
-        question.exam.total_questions = db.query(func.count(Question.id)).filter(
-            Question.exam_id == question.exam_id,
-            Question.is_active == True
-        ).scalar()
-        db.commit()
-
+    ctx.db.commit()
+    ctx.db.refresh(question)
     return question
 
 
-@router.delete("/questions/{question_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/questions/{question_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_roles(EXAM_AUTHOR_ROLES))],
+)
 def delete_question(
     question_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Delete a question"""
-    require_manager(current_user)
-
-    question = db.query(Question).options(
-        joinedload(Question.exam)
-    ).filter(Question.id == question_id).first()
-
-    if not question:
-        raise HTTPException(status_code=404, detail="Question not found")
-
-    if current_user.role != "super_admin":
-        check_resource_access(current_user, question.exam.institution_id)
-
+    question = _get_question_scoped(ctx, question_id)
     exam = question.exam
-    db.delete(question)
+    ctx.db.delete(question)
+    ctx.db.flush()
 
-    # Update exam question count
-    exam.total_questions = db.query(func.count(Question.id)).filter(
-        Question.exam_id == exam.id,
-        Question.is_active == True
-    ).scalar() - 1
-
-    db.commit()
-
-    return None
-
-
-# ============ Exam Scheduling ============
-
-@router.post("/schedules", response_model=ExamScheduleResponse, status_code=status.HTTP_201_CREATED)
-def schedule_exam(
-    schedule_data: ExamScheduleCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Schedule an exam for a specific batch"""
-    require_manager(current_user)
-
-    exam = db.query(Exam).filter(Exam.id == schedule_data.exam_id).first()
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
-
-    if current_user.role != "super_admin":
-        check_resource_access(current_user, exam.institution_id)
-
-    new_schedule = ExamSchedule(
-        exam_id=schedule_data.exam_id,
-        institution_id=exam.institution_id,
-        batch_time=schedule_data.batch_time,
-        batch_identifier=schedule_data.batch_identifier,
-        batch_month=schedule_data.batch_month,
-        batch_year=schedule_data.batch_year,
-        scheduled_date=schedule_data.scheduled_date,
-        start_time=schedule_data.start_time,
-        end_time=schedule_data.end_time,
-        created_by=current_user.id
-    )
-
-    db.add(new_schedule)
-    db.commit()
-    db.refresh(new_schedule)
-
-    return new_schedule
-
-
-@router.get("/schedules", response_model=List[ExamScheduleDetailResponse])
-def list_schedules(
-    exam_id: Optional[UUID] = None,
-    batch_time: Optional[str] = None,
-    scheduled_date: Optional[str] = None,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """List exam schedules with optional filters"""
-    require_manager(current_user)
-
-    query = db.query(ExamSchedule).options(
-        joinedload(ExamSchedule.exam).joinedload(Exam.course),
-        joinedload(ExamSchedule.exam).joinedload(Exam.module)
-    )
-
-    if current_user.role != "super_admin":
-        query = query.filter(ExamSchedule.institution_id == current_user.institution_id)
-
-    if exam_id:
-        query = query.filter(ExamSchedule.exam_id == exam_id)
-    if batch_time:
-        query = query.filter(ExamSchedule.batch_time == batch_time)
-    if scheduled_date:
-        query = query.filter(ExamSchedule.scheduled_date == scheduled_date)
-
-    schedules = query.filter(ExamSchedule.is_active == True).order_by(
-        ExamSchedule.scheduled_date.desc(),
-        ExamSchedule.start_time
-    ).all()
-
-    # Build response with additional info
-    result = []
-    for s in schedules:
-        result.append(ExamScheduleDetailResponse(
-            id=s.id,
-            exam_id=s.exam_id,
-            institution_id=s.institution_id,
-            batch_time=s.batch_time,
-            batch_identifier=s.batch_identifier,
-            batch_month=s.batch_month,
-            batch_year=s.batch_year,
-            scheduled_date=s.scheduled_date,
-            start_time=s.start_time,
-            end_time=s.end_time,
-            is_active=s.is_active,
-            created_by=s.created_by,
-            created_at=s.created_at,
-            exam_title=s.exam.title if s.exam else None,
-            course_name=s.exam.course.name if s.exam and s.exam.course else None,
-            module_name=s.exam.module.module_name if s.exam and s.exam.module else None
-        ))
-
-    return result
-
-
-@router.delete("/schedules/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)
-def cancel_schedule(
-    schedule_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Cancel an exam schedule"""
-    require_manager(current_user)
-
-    schedule = db.query(ExamSchedule).filter(ExamSchedule.id == schedule_id).first()
-    if not schedule:
-        raise HTTPException(status_code=404, detail="Schedule not found")
-
-    if current_user.role != "super_admin":
-        check_resource_access(current_user, schedule.institution_id)
-
-    schedule.is_active = False
-    db.commit()
-
+    _refresh_question_count(ctx, exam)
+    ctx.db.commit()
     return None

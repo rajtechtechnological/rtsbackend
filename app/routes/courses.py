@@ -1,181 +1,168 @@
+"""
+Courses. institution_id NULL = global template (visible to every tenant,
+managed by super_admin only). Institutions clone-on-adopt: editing a global
+course creates an institution-owned override (copy-on-write — canonical
+behavior per docs/01 §1). Writes require staff_manager+.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from uuid import UUID
-from app.database import get_db
-from app.models.user import User
+
+from app.dependencies import require_roles, MANAGER_ROLES, ALL_ROLES
 from app.models.course import Course
 from app.schemas.course import CourseCreate, CourseUpdate, CourseResponse
-from app.dependencies import get_current_user, check_resource_access
+from app.tenancy import TenantContext, get_tenant
 
 router = APIRouter()
 
 
-@router.post("/", response_model=CourseResponse, status_code=status.HTTP_201_CREATED)
+def _visible_course_or_404(ctx: TenantContext, course_id: UUID) -> Course:
+    """A course is visible if it is global or belongs to the caller's
+    institution. Anything else is a 404."""
+    query = ctx.db.query(Course).filter(Course.id == course_id)
+    if ctx.institution_id is not None:
+        query = query.filter(
+            (Course.institution_id == ctx.institution_id) | (Course.institution_id.is_(None))
+        )
+    course = query.first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return course
+
+
+@router.post(
+    "/",
+    response_model=CourseResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_roles(MANAGER_ROLES))],
+)
 def create_course(
     course_data: CourseCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Create a new course"""
-    # For super_admin, institution_id is optional (global courses)
-    # For other roles, use their institution_id or the provided one
-    if current_user.role == "super_admin":
-        institution_id = course_data.institution_id
+    """Create a course. super_admin with no institution_id creates a global
+    template; tenant users always create courses owned by their own
+    institution (request institution_id is ignored)."""
+    if ctx.institution_id is not None:
+        institution_id = ctx.institution_id  # never trust the request body
     else:
-        institution_id = course_data.institution_id or current_user.institution_id
-        if institution_id:
-            check_resource_access(current_user, institution_id)
+        institution_id = course_data.institution_id  # None = global template
 
     new_course = Course(
         institution_id=institution_id,
         name=course_data.name,
         description=course_data.description,
         duration_months=course_data.duration_months,
-        fee_amount=course_data.fee_amount
+        fee_amount=course_data.fee_amount,
     )
 
-    db.add(new_course)
-    db.commit()
-    db.refresh(new_course)
-
+    ctx.db.add(new_course)
+    ctx.db.commit()
+    ctx.db.refresh(new_course)
     return new_course
 
 
-@router.get("/", response_model=List[CourseResponse])
-def list_courses(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+@router.get(
+    "/",
+    response_model=List[CourseResponse],
+    dependencies=[Depends(require_roles(ALL_ROLES))],
+)
+def list_courses(ctx: TenantContext = Depends(get_tenant)):
     """
     List courses with override logic:
-    - Super admin sees all courses
-    - Franchise admin sees:
-      - All global courses (institution_id IS NULL)
-      - Their institution-specific overrides
-      - Institution overrides replace global courses with same name
+    - super_admin sees all courses
+    - tenant users see global templates + their institution's overrides;
+      an override replaces the global course with the same name.
     """
-    if current_user.role == "super_admin":
-        # Super admin sees everything
-        courses = db.query(Course).all()
-    else:
-        # Get global courses (institution_id is NULL)
-        global_courses = db.query(Course).filter(Course.institution_id.is_(None)).all()
+    if ctx.institution_id is None:
+        return ctx.db.query(Course).all()
 
-        # Get institution-specific courses (overrides)
-        institution_courses = db.query(Course).filter(
-            Course.institution_id == current_user.institution_id
-        ).all()
+    global_courses = ctx.db.query(Course).filter(Course.institution_id.is_(None)).all()
+    institution_courses = ctx.db.query(Course).filter(
+        Course.institution_id == ctx.institution_id
+    ).all()
 
-        # Build a dict of institution courses by name for quick lookup
-        institution_course_names = {c.name for c in institution_courses}
-
-        # Combine: institution courses + global courses (excluding overridden ones)
-        courses = institution_courses + [
-            c for c in global_courses
-            if c.name not in institution_course_names
-        ]
-
-    return courses
+    institution_course_names = {c.name for c in institution_courses}
+    return institution_courses + [
+        c for c in global_courses if c.name not in institution_course_names
+    ]
 
 
-@router.get("/{course_id}", response_model=CourseResponse)
+@router.get(
+    "/{course_id}",
+    response_model=CourseResponse,
+    dependencies=[Depends(require_roles(ALL_ROLES))],
+)
 def get_course(
     course_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Get course details"""
-    course = db.query(Course).filter(Course.id == course_id).first()
-
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    check_resource_access(current_user, course.institution_id)
-
-    return course
+    return _visible_course_or_404(ctx, course_id)
 
 
-@router.patch("/{course_id}", response_model=CourseResponse)
+@router.patch(
+    "/{course_id}",
+    response_model=CourseResponse,
+    dependencies=[Depends(require_roles(MANAGER_ROLES))],
+)
 def update_course(
     course_id: UUID,
     update_data: CourseUpdate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
     """
-    Update course details
-    - Super admin: updates the course directly
-    - Franchise admin editing global course: creates institution-specific override
-    - Franchise admin editing own course: updates it directly
+    Update a course:
+    - super_admin: updates directly (including global templates)
+    - tenant manager editing a GLOBAL course: creates an institution-owned
+      override (copy-on-write; shared rows are never edited)
+    - tenant manager editing own course: updates it directly
     """
-    course = db.query(Course).filter(Course.id == course_id).first()
+    course = _visible_course_or_404(ctx, course_id)
 
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    # If course is global (institution_id is NULL) and user is NOT super_admin
-    # Create an institution-specific override instead of updating the global course
-    if course.institution_id is None and current_user.role != "super_admin":
-        # Create a new course as an override for this institution
+    if course.institution_id is None and ctx.institution_id is not None:
         override_course = Course(
-            institution_id=current_user.institution_id,
-            name=course.name,  # Keep same name to link override
+            institution_id=ctx.institution_id,
+            name=course.name,  # same name links override to template
             description=course.description,
             duration_months=course.duration_months,
-            fee_amount=course.fee_amount
+            fee_amount=course.fee_amount,
         )
-
-        # Apply the updates to the override
-        for key, value in update_data.dict(exclude_unset=True).items():
+        for key, value in update_data.model_dump(exclude_unset=True).items():
             setattr(override_course, key, value)
 
-        db.add(override_course)
-        db.commit()
-        db.refresh(override_course)
-
+        ctx.db.add(override_course)
+        ctx.db.commit()
+        ctx.db.refresh(override_course)
         return override_course
-    else:
-        # Normal update flow (super_admin or updating own institution course)
-        check_resource_access(current_user, course.institution_id)
 
-        for key, value in update_data.dict(exclude_unset=True).items():
-            setattr(course, key, value)
+    for key, value in update_data.model_dump(exclude_unset=True).items():
+        setattr(course, key, value)
 
-        db.commit()
-        db.refresh(course)
-
-        return course
+    ctx.db.commit()
+    ctx.db.refresh(course)
+    return course
 
 
-@router.delete("/{course_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{course_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_roles(MANAGER_ROLES))],
+)
 def delete_course(
     course_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """
-    Delete a course
-    - Super admin: can delete any course (global or institution-specific)
-    - Franchise admin: can only delete their own institution's overrides
-    - Cannot delete global courses unless super_admin
-    """
-    course = db.query(Course).filter(Course.id == course_id).first()
+    """Delete a course. Global templates can only be deleted by super_admin;
+    tenant managers may delete their own institution's overrides."""
+    course = _visible_course_or_404(ctx, course_id)
 
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    # If course is global and user is not super_admin, prevent deletion
-    if course.institution_id is None and current_user.role != "super_admin":
+    if course.institution_id is None and ctx.institution_id is not None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot delete global courses. Only institution-specific overrides can be deleted."
+            detail="Cannot delete global courses. Only institution-specific overrides can be deleted.",
         )
 
-    # Check access for institution-specific courses
-    check_resource_access(current_user, course.institution_id)
-
-    db.delete(course)
-    db.commit()
-
+    ctx.db.delete(course)
+    ctx.db.commit()
     return None

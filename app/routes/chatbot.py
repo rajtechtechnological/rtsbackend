@@ -10,12 +10,11 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
-from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.services.chatbot_engine import handle_message, menu_chips
+from app.tenancy import TenantContext, get_tenant
 
 router = APIRouter()
 
@@ -45,16 +44,16 @@ class MenuOut(BaseModel):
 @router.post("/message", response_model=MessageOut)
 def post_message(
     payload: MessageIn,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(get_tenant),
 ):
     """Answer a free-text question or a structured chip click. Deterministic:
-    the same input always produces the same reply."""
+    the same input always produces the same reply. get_tenant arms RLS as a
+    backstop; the data handlers additionally filter inline by institution."""
     if not (payload.text and payload.text.strip()) and not payload.intent:
         raise HTTPException(status_code=400, detail="Provide 'text' or 'intent'.")
     return handle_message(
-        db,
-        current_user,
+        ctx.db,
+        ctx.user,
         text=payload.text,
         intent_id=payload.intent,
         entity=payload.entity,

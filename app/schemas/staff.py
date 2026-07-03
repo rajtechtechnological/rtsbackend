@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, Literal, List, Dict
 from datetime import date, datetime
 from uuid import UUID
 
@@ -10,13 +10,16 @@ class StaffBase(BaseModel):
 
 
 class StaffCreate(BaseModel):
-    """Schema for creating a new staff member (creates both User and Staff records)"""
+    """Creates both User and Staff records.
+
+    NOTE: no institution_id — always set server-side from TenantContext
+    (super_admin passes ?institution_id explicitly, see route).
+    """
     full_name: str
     email: EmailStr
-    phone: str  # Required - used as default password
-    role: str  # 'staff', 'staff_manager', or 'receptionist'
+    phone: str  # required — used as default password
+    role: Literal["staff", "staff_manager", "receptionist"]
     daily_rate: float
-    institution_id: UUID
 
 
 class StaffUpdate(StaffBase):
@@ -27,14 +30,14 @@ class StaffResponse(StaffBase):
     id: UUID
     user_id: UUID
     institution_id: UUID
-    join_date: date  # Consistent naming with frontend
+    join_date: date  # consistent naming with frontend
     created_at: datetime
     updated_at: Optional[datetime] = None
 
     # User information (from relationship)
     full_name: str
     email: str
-    phone: str  # Required
+    phone: Optional[str] = None
     role: str
     status: str  # user.is_active -> 'active' or 'inactive'
 
@@ -45,17 +48,18 @@ class StaffResponse(StaffBase):
 class AttendanceCreate(BaseModel):
     staff_id: UUID
     date: date
-    status: str  # present, absent, half_day, leave
+    status: Literal["present", "absent", "half_day", "leave"]
     notes: Optional[str] = None
 
 
 class AttendanceBatchCreate(BaseModel):
     date: date
-    attendance: list[dict]  # [{staff_id: UUID, status: str}, ...]
+    attendance: List[Dict[str, str]]  # [{staff_id: UUID, status: str}, ...]
 
 
 class AttendanceResponse(BaseModel):
     id: UUID
+    institution_id: UUID
     staff_id: UUID
     date: date
     status: str

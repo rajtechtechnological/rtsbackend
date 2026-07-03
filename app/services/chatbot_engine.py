@@ -299,32 +299,25 @@ def _h_fee_balance(db, user, entity, tokens):
 
 
 def _h_next_exam(db, user, entity, tokens):
-    from sqlalchemy import or_
-
+    from app.models.batch import Batch
     from app.models.exam import Exam, ExamSchedule
 
     student = _own_student_row(db, user)
     if student is None:
         return dict(_NO_STUDENT)
 
+    # Batch targeting is first-class now (F-08): a schedule matches iff it
+    # targets the student's batch_id.
     query = (
         db.query(ExamSchedule, Exam)
         .join(Exam, ExamSchedule.exam_id == Exam.id)
         .filter(
             ExamSchedule.institution_id == user.institution_id,
+            ExamSchedule.batch_id == student.batch_id,
             ExamSchedule.is_active.is_(True),
             ExamSchedule.scheduled_date >= date.today(),
         )
     )
-    if student.batch_time:
-        query = query.filter(ExamSchedule.batch_time == student.batch_time)
-    for column, value in (
-        (ExamSchedule.batch_identifier, student.batch_identifier),
-        (ExamSchedule.batch_month, student.batch_month),
-        (ExamSchedule.batch_year, student.batch_year),
-    ):
-        if value:
-            query = query.filter(or_(column.is_(None), column == "", column == value))
 
     row = query.order_by(ExamSchedule.scheduled_date, ExamSchedule.start_time).first()
     if row is None:
@@ -334,7 +327,8 @@ def _h_next_exam(db, user, entity, tokens):
     when = schedule.scheduled_date.strftime("%d %b %Y")
     start = schedule.start_time.strftime("%I:%M %p").lstrip("0")
     end = schedule.end_time.strftime("%I:%M %p").lstrip("0")
-    batch = schedule.batch_time or student.batch_time or "-"
+    batch_row = db.query(Batch).filter(Batch.id == schedule.batch_id).first()
+    batch = batch_row.name if batch_row else "-"
     return {
         "reply": f"Your next exam is **{exam.title}** on {when}, {start}–{end} (batch {batch})."
     }
@@ -353,7 +347,7 @@ def _h_my_result(db, user, entity, tokens):
         .filter(
             ExamAttempt.student_id == student.id,
             Exam.institution_id == user.institution_id,
-            ExamAttempt.status.in_(["completed", "submitted", "timed_out"]),
+            ExamAttempt.status.in_(["submitted", "timed_out", "verified"]),
         )
         .order_by(ExamAttempt.created_at.desc())
         .first()
@@ -434,7 +428,7 @@ def _h_today_collections(db, user, entity, tokens):
         .join(Student, FeePayment.student_id == Student.id)
         .filter(
             Student.institution_id == user.institution_id,
-            FeePayment.payment_date == date.today(),
+            FeePayment.paid_at == date.today(),
         )
         .one()
     )

@@ -1,137 +1,134 @@
+"""
+Payroll. Generation/approval requires director+ (permission matrix); every
+staff role may view their OWN payslips. Payroll rows carry a denormalized
+institution_id so ctx.q and RLS apply directly.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from uuid import UUID
-from datetime import datetime
-from app.database import get_db
-from app.models.user import User
-from app.models.staff import Staff
-from app.models.payroll import PayrollRecord
-from app.schemas.payroll import PayrollGenerate, PayrollResponse
-from app.dependencies import get_current_user
-from app.routes.attendance import get_attendance_summary
 from decimal import Decimal
+
+from app.dependencies import require_roles, STAFF_ADMIN_ROLES, ALL_STAFF_ROLES, MANAGER_ROLES
+from app.models.payroll import PayrollRecord
+from app.models.staff import Staff
+from app.routes.attendance import _attendance_summary
+from app.schemas.payroll import PayrollGenerate, PayrollResponse
+from app.tenancy import TenantContext, get_tenant
 
 router = APIRouter()
 
 
-@router.post("/generate")
+@router.post(
+    "/generate",
+    dependencies=[Depends(require_roles(STAFF_ADMIN_ROLES))],
+)
 def generate_payroll(
     payroll_data: PayrollGenerate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Generate payroll for a specific month/year"""
-    # Get all staff in the institution (or all if super_admin)
-    if payroll_data.institution_id:
-        staff_list = db.query(Staff).filter(
-            Staff.institution_id == payroll_data.institution_id
-        ).all()
-    elif current_user.role == "super_admin":
-        staff_list = db.query(Staff).all()
-    else:
-        staff_list = db.query(Staff).filter(
-            Staff.institution_id == current_user.institution_id
-        ).all()
+    """Generate payroll for a month/year (director+). institution_id in the
+    body is honored only for super_admin."""
+    institution_id = ctx.require_institution_id(payroll_data.institution_id)
+    staff_list = ctx.db.query(Staff).filter(Staff.institution_id == institution_id).all()
 
     generated_count = 0
-
     for staff in staff_list:
-        # Check if payroll already exists
-        existing = db.query(PayrollRecord).filter(
+        existing = ctx.db.query(PayrollRecord).filter(
             PayrollRecord.staff_id == staff.id,
             PayrollRecord.month == payroll_data.month,
-            PayrollRecord.year == payroll_data.year
+            PayrollRecord.year == payroll_data.year,
         ).first()
-
         if existing:
-            continue  # Skip if already generated
+            continue
 
-        # Get attendance summary
-        summary = get_attendance_summary(
-            staff_id=staff.id,
-            month=payroll_data.month,
-            year=payroll_data.year,
-            db=db
-        )
-
-        # Calculate total amount
+        summary = _attendance_summary(ctx, staff.id, payroll_data.month, payroll_data.year)
         days_present = summary["days_present"]
         days_half = summary["days_half"]
         daily_rate = staff.daily_rate or Decimal(0)
+        total_amount = (Decimal(days_present) * daily_rate) + (
+            Decimal(days_half) * daily_rate * Decimal("0.5")
+        )
 
-        total_amount = (Decimal(days_present) * daily_rate) + (Decimal(days_half) * daily_rate * Decimal(0.5))
-
-        # Create payroll record
-        payroll = PayrollRecord(
+        ctx.db.add(PayrollRecord(
+            institution_id=staff.institution_id,
             staff_id=staff.id,
             month=payroll_data.month,
             year=payroll_data.year,
             days_present=days_present,
             days_half=days_half,
-            total_amount=total_amount
-        )
-
-        db.add(payroll)
+            total_amount=total_amount,
+        ))
         generated_count += 1
 
-    db.commit()
-
+    ctx.db.commit()
     return {"message": f"Generated payroll for {generated_count} staff members"}
 
 
-@router.get("/", response_model=List[PayrollResponse])
+@router.get(
+    "/",
+    response_model=List[PayrollResponse],
+    dependencies=[Depends(require_roles(ALL_STAFF_ROLES))],
+)
 def list_payroll(
-    month: int = None,
-    year: int = None,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """List payroll records with optional filters"""
-    query = db.query(PayrollRecord)
+    """List payroll records. Managers see the institution; staff/receptionist
+    see only their own payslips."""
+    query = ctx.q(PayrollRecord)
 
-    # Filter by institution
-    if current_user.role != "super_admin":
-        query = query.join(Staff).filter(Staff.institution_id == current_user.institution_id)
+    if ctx.user.role not in MANAGER_ROLES:
+        own = ctx.q(Staff).filter(Staff.user_id == ctx.user.id).first()
+        if not own:
+            return []
+        query = query.filter(PayrollRecord.staff_id == own.id)
 
     if month:
         query = query.filter(PayrollRecord.month == month)
-
     if year:
         query = query.filter(PayrollRecord.year == year)
 
-    payroll_records = query.order_by(PayrollRecord.generated_at.desc()).all()
-
-    return payroll_records
+    return query.order_by(PayrollRecord.generated_at.desc()).all()
 
 
-@router.get("/{payroll_id}", response_model=PayrollResponse)
-def get_payroll(
-    payroll_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get payroll details"""
-    payroll = db.query(PayrollRecord).filter(PayrollRecord.id == payroll_id).first()
-
+def _get_payroll_scoped(ctx: TenantContext, payroll_id: UUID) -> PayrollRecord:
+    payroll = ctx.q(PayrollRecord).filter(PayrollRecord.id == payroll_id).first()
     if not payroll:
         raise HTTPException(status_code=404, detail="Payroll record not found")
+
+    if ctx.user.role not in MANAGER_ROLES:
+        own = ctx.q(Staff).filter(Staff.user_id == ctx.user.id).first()
+        if not own or payroll.staff_id != own.id:
+            # Own-records-only: someone else's payslip is a 404
+            raise HTTPException(status_code=404, detail="Payroll record not found")
 
     return payroll
 
 
-@router.post("/{payroll_id}/generate-payslip")
+@router.get(
+    "/{payroll_id}",
+    response_model=PayrollResponse,
+    dependencies=[Depends(require_roles(ALL_STAFF_ROLES))],
+)
+def get_payroll(
+    payroll_id: UUID,
+    ctx: TenantContext = Depends(get_tenant),
+):
+    return _get_payroll_scoped(ctx, payroll_id)
+
+
+@router.post(
+    "/{payroll_id}/generate-payslip",
+    dependencies=[Depends(require_roles(ALL_STAFF_ROLES))],
+)
 def generate_payslip(
     payroll_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Generate PDF payslip for a payroll record"""
-    payroll = db.query(PayrollRecord).filter(PayrollRecord.id == payroll_id).first()
+    """Generate PDF payslip for a payroll record (on demand, never stored)."""
+    payroll = _get_payroll_scoped(ctx, payroll_id)
 
-    if not payroll:
-        raise HTTPException(status_code=404, detail="Payroll record not found")
-
-    # TODO: Implement PDF generation using ReportLab
-    # For now, return a placeholder
-    return {"message": "PDF generation not yet implemented", "payroll_id": str(payroll_id)}
+    # TODO: implement PDF generation with ReportLab (streamed, not stored)
+    return {"message": "PDF generation not yet implemented", "payroll_id": str(payroll.id)}

@@ -1,153 +1,192 @@
+"""
+Staff attendance. Marking requires staff_manager+ (permission matrix); every
+staff role may view their OWN records ("View own attendance/payslips").
+Attendance rows carry a denormalized institution_id so ctx.q and RLS apply
+directly.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from datetime import date
 from uuid import UUID
-from app.database import get_db
-from app.models.user import User
-from app.models.staff import Staff
+
+from app.dependencies import require_roles, MANAGER_ROLES, ALL_STAFF_ROLES
 from app.models.attendance import StaffAttendance
+from app.models.staff import Staff
 from app.schemas.staff import AttendanceCreate, AttendanceBatchCreate, AttendanceResponse
-from app.dependencies import get_current_user
+from app.tenancy import TenantContext, get_tenant
 
 router = APIRouter()
 
 
-@router.post("/", response_model=AttendanceResponse)
-def mark_attendance(
-    attendance_data: AttendanceCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Mark attendance for a single staff member"""
-    # Get staff to verify institution
-    staff = db.query(Staff).filter(Staff.id == attendance_data.staff_id).first()
+def _own_staff_row(ctx: TenantContext) -> Optional[Staff]:
+    return ctx.q(Staff).filter(Staff.user_id == ctx.user.id).first()
 
+
+def _scoped_staff_or_404(ctx: TenantContext, staff_id: UUID) -> Staff:
+    staff = ctx.q(Staff).filter(Staff.id == staff_id).first()
     if not staff:
         raise HTTPException(status_code=404, detail="Staff not found")
+    return staff
 
-    # Check if already marked for this date
-    existing = db.query(StaffAttendance).filter(
-        StaffAttendance.staff_id == attendance_data.staff_id,
-        StaffAttendance.date == attendance_data.date
+
+@router.post(
+    "/",
+    response_model=AttendanceResponse,
+    dependencies=[Depends(require_roles(MANAGER_ROLES))],
+)
+def mark_attendance(
+    attendance_data: AttendanceCreate,
+    ctx: TenantContext = Depends(get_tenant),
+):
+    """Mark attendance for a single staff member (staff_manager+)."""
+    staff = _scoped_staff_or_404(ctx, attendance_data.staff_id)
+
+    existing = ctx.db.query(StaffAttendance).filter(
+        StaffAttendance.staff_id == staff.id,
+        StaffAttendance.date == attendance_data.date,
     ).first()
-
     if existing:
         raise HTTPException(status_code=400, detail="Attendance already marked for this date")
 
     new_attendance = StaffAttendance(
-        staff_id=attendance_data.staff_id,
+        institution_id=staff.institution_id,
+        staff_id=staff.id,
         date=attendance_data.date,
         status=attendance_data.status,
-        marked_by=current_user.id,
-        notes=attendance_data.notes
+        marked_by=ctx.user.id,
+        notes=attendance_data.notes,
     )
 
-    db.add(new_attendance)
-    db.commit()
-    db.refresh(new_attendance)
-
+    ctx.db.add(new_attendance)
+    ctx.db.commit()
+    ctx.db.refresh(new_attendance)
     return new_attendance
 
 
-@router.post("/batch")
+@router.post(
+    "/batch",
+    dependencies=[Depends(require_roles(MANAGER_ROLES))],
+)
 def mark_attendance_batch(
     batch_data: AttendanceBatchCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Mark attendance for multiple staff members at once"""
+    """Mark attendance for multiple staff members at once (staff_manager+)."""
     marked_count = 0
 
     for item in batch_data.attendance:
-        staff_id = UUID(item.get("staff_id"))
-        status = item.get("status")
+        staff_id = UUID(str(item.get("staff_id")))
+        att_status = item.get("status")
+        if att_status not in ("present", "absent", "half_day", "leave"):
+            continue
 
-        # Check if already marked
-        existing = db.query(StaffAttendance).filter(
-            StaffAttendance.staff_id == staff_id,
-            StaffAttendance.date == batch_data.date
+        # Tenant-scoped: silently skip staff outside the caller's institution
+        staff = ctx.q(Staff).filter(Staff.id == staff_id).first()
+        if not staff:
+            continue
+
+        existing = ctx.db.query(StaffAttendance).filter(
+            StaffAttendance.staff_id == staff.id,
+            StaffAttendance.date == batch_data.date,
         ).first()
-
         if not existing:
-            new_attendance = StaffAttendance(
-                staff_id=staff_id,
+            ctx.db.add(StaffAttendance(
+                institution_id=staff.institution_id,
+                staff_id=staff.id,
                 date=batch_data.date,
-                status=status,
-                marked_by=current_user.id
-            )
-            db.add(new_attendance)
+                status=att_status,
+                marked_by=ctx.user.id,
+            ))
             marked_count += 1
 
-    db.commit()
-
+    ctx.db.commit()
     return {"message": f"Marked attendance for {marked_count} staff members"}
 
 
-@router.get("/", response_model=List[AttendanceResponse])
+@router.get(
+    "/",
+    response_model=List[AttendanceResponse],
+    dependencies=[Depends(require_roles(ALL_STAFF_ROLES))],
+)
 def list_attendance(
-    staff_id: UUID = None,
-    start_date: date = None,
-    end_date: date = None,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    staff_id: Optional[UUID] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """List attendance records with optional filters"""
-    query = db.query(StaffAttendance)
+    """List attendance. Managers see the institution; staff/receptionist see
+    only their own records."""
+    query = ctx.q(StaffAttendance)
 
-    # Filter by institution
-    if current_user.role != "super_admin":
-        query = query.join(Staff).filter(Staff.institution_id == current_user.institution_id)
-
-    # Apply filters
-    if staff_id:
+    if ctx.user.role not in MANAGER_ROLES:
+        own = _own_staff_row(ctx)
+        if not own:
+            return []
+        query = query.filter(StaffAttendance.staff_id == own.id)
+    elif staff_id:
         query = query.filter(StaffAttendance.staff_id == staff_id)
 
     if start_date:
         query = query.filter(StaffAttendance.date >= start_date)
-
     if end_date:
         query = query.filter(StaffAttendance.date <= end_date)
 
-    attendance_records = query.order_by(StaffAttendance.date.desc()).all()
-
-    return attendance_records
+    return query.order_by(StaffAttendance.date.desc()).all()
 
 
-@router.get("/summary")
+@router.get(
+    "/summary",
+    dependencies=[Depends(require_roles(ALL_STAFF_ROLES))],
+)
 def get_attendance_summary(
     staff_id: UUID,
     month: int,
     year: int,
-    db: Session = Depends(get_db)
+    ctx: TenantContext = Depends(get_tenant),
 ):
-    """Get monthly attendance summary for payroll calculation"""
+    """Monthly attendance summary (used for payroll calculation)."""
+    staff = _scoped_staff_or_404(ctx, staff_id)
+
+    # Non-managers may only see their own summary
+    if ctx.user.role not in MANAGER_ROLES and staff.user_id != ctx.user.id:
+        raise HTTPException(status_code=404, detail="Staff not found")
+
+    return _attendance_summary(ctx, staff.id, month, year)
+
+
+def _attendance_summary(ctx: TenantContext, staff_id: UUID, month: int, year: int) -> dict:
     from sqlalchemy import func, extract
 
-    summary = db.query(
-        StaffAttendance.status,
-        func.count(StaffAttendance.id).label('count')
-    ).filter(
-        StaffAttendance.staff_id == staff_id,
-        extract('month', StaffAttendance.date) == month,
-        extract('year', StaffAttendance.date) == year
-    ).group_by(StaffAttendance.status).all()
+    summary = (
+        ctx.db.query(
+            StaffAttendance.status,
+            func.count(StaffAttendance.id).label("count"),
+        )
+        .filter(
+            StaffAttendance.staff_id == staff_id,
+            extract("month", StaffAttendance.date) == month,
+            extract("year", StaffAttendance.date) == year,
+        )
+        .group_by(StaffAttendance.status)
+        .all()
+    )
 
     result = {
         "days_present": 0,
         "days_absent": 0,
         "days_half": 0,
-        "days_leave": 0
+        "days_leave": 0,
     }
 
-    for status, count in summary:
-        if status == "present":
+    for att_status, count in summary:
+        if att_status == "present":
             result["days_present"] = count
-        elif status == "absent":
+        elif att_status == "absent":
             result["days_absent"] = count
-        elif status == "half_day":
+        elif att_status == "half_day":
             result["days_half"] = count
-        elif status == "leave":
+        elif att_status == "leave":
             result["days_leave"] = count
 
     return result
