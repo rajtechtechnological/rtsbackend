@@ -7,10 +7,20 @@ from app.database import Base
 
 
 class Course(Base):
+    """
+    Course. institution_id NULL = global template owned by head office;
+    institutions clone-on-adopt (copy-on-write on edit — canonical behavior,
+    docs/01 §1).
+    """
     __tablename__ = "courses"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    institution_id = Column(UUID(as_uuid=True), ForeignKey("institutions.id", ondelete="CASCADE"), nullable=True, index=True)
+    institution_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     name = Column(String, nullable=False)
     description = Column(String)
     duration_months = Column(Integer)
@@ -22,4 +32,9 @@ class Course(Base):
     student_enrollments = relationship("StudentCourse", back_populates="course", cascade="all, delete-orphan")
     payments = relationship("FeePayment", back_populates="course")
     certificates = relationship("Certificate", back_populates="course")
-    modules = relationship("CourseModule", back_populates="course", cascade="all, delete-orphan", order_by="CourseModule.order_index")
+    modules = relationship(
+        "CourseModule",
+        back_populates="course",
+        cascade="all, delete-orphan",
+        order_by="CourseModule.order_index",
+    )

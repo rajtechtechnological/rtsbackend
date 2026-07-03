@@ -1,16 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.database import engine, Base
 from app.config import settings
 from pathlib import Path
 
-# Import routes (we'll create these next)
+# Import routes
 from app.routes import auth, institutions, students, courses, staff, attendance, payroll, certificates, dashboard, payments, course_modules
-from app.routes import exams, student_exams, exam_verification, chatbot
+from app.routes import exams, student_exams, exam_verification, chatbot, batches
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+# NOTE (F-09): no Base.metadata.create_all here. The schema is created by
+# Alembic only: `alembic upgrade head` against a fresh database.
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -46,6 +45,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
 app.include_router(institutions.router, prefix="/api/institutions", tags=["Institutions"])
 app.include_router(students.router, prefix="/api/students", tags=["Students"])
+app.include_router(batches.router, prefix="/api/batches", tags=["Batches"])
 app.include_router(courses.router, prefix="/api/courses", tags=["Courses"])
 app.include_router(staff.router, prefix="/api/staff", tags=["Staff"])
 app.include_router(attendance.router, prefix="/api/attendance", tags=["Attendance"])

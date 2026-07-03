@@ -7,9 +7,11 @@ from app.database import Base
 
 
 class StudentCourse(Base):
+    """Enrollment. No institution_id of its own — always reached through the
+    parent Student (tenant-scoped via ctx.q)."""
     __tablename__ = "student_courses"
     __table_args__ = (
-        UniqueConstraint('student_id', 'course_id', name='unique_student_course'),
+        UniqueConstraint("student_id", "course_id", name="uq_student_courses_student_course"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

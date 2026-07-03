@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Date, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, String, Date, DateTime, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -9,10 +9,19 @@ from app.database import Base
 class StaffAttendance(Base):
     __tablename__ = "staff_attendance"
     __table_args__ = (
-        UniqueConstraint('staff_id', 'date', name='unique_staff_date'),
+        UniqueConstraint("staff_id", "date", name="uq_staff_attendance_staff_date"),
+        Index("ix_staff_attendance_staff_date", "staff_id", "date"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Denormalized so attendance is directly RLS-protected and ctx.q applies
+    # (docs/01 §4 lists StaffAttendance as a ctx.q table).
+    institution_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     staff_id = Column(UUID(as_uuid=True), ForeignKey("staff.id", ondelete="CASCADE"), nullable=False, index=True)
     date = Column(Date, nullable=False, index=True)
     status = Column(String, nullable=False)  # present, absent, half_day, leave

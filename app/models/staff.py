@@ -11,9 +11,14 @@ class Staff(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), unique=True)
-    institution_id = Column(UUID(as_uuid=True), ForeignKey("institutions.id", ondelete="CASCADE"), nullable=False, index=True)
+    institution_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     position = Column(String)
-    daily_rate = Column(Numeric(10, 2))  # Per-day earning set by director
+    daily_rate = Column(Numeric(10, 2))  # per-day earning set by director
     joining_date = Column(Date, server_default=func.current_date())
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
