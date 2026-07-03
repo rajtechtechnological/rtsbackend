@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Import routes (we'll create these next)
 from app.routes import auth, institutions, students, courses, staff, attendance, payroll, certificates, dashboard, payments, course_modules
-from app.routes import exams, student_exams, exam_verification, chatbot, chatbot_ws
+from app.routes import exams, student_exams, exam_verification, chatbot
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -57,7 +57,6 @@ app.include_router(exams.router, prefix="/api/exams", tags=["Exams"])
 app.include_router(student_exams.router, prefix="/api/student/exams", tags=["Student Exams"])
 app.include_router(exam_verification.router, prefix="/api/exams/attempts", tags=["Exam Verification"])
 app.include_router(chatbot.router, prefix="/api/chatbot", tags=["Chatbot"])
-app.include_router(chatbot_ws.router, prefix="/api/chatbot", tags=["Chatbot WebSocket"])
 
 
 @app.get("/", tags=["Root"])
