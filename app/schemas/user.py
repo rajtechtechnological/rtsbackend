@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, Literal
 from datetime import datetime
 from uuid import UUID
@@ -25,7 +25,7 @@ class UserBase(BaseModel):
 
 # Schema for creating a user (super_admin only — no public signup)
 class UserCreate(UserBase):
-    password: str
+    password: str = Field(..., min_length=8)
 
 
 # Schema for user login

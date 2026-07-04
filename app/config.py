@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     # SERVERLESS=true on Vercel: NullPool + no pre-ping (see app/database.py).
     SERVERLESS: bool = False
 
+    # "development" | "production". In production the interactive API docs
+    # (/docs, /redoc, /openapi.json) are disabled — set on Vercel.
+    ENVIRONMENT: str = "development"
+
     # Auth Configuration
     # SECURITY (F-11): no default — the app must refuse to start if this is unset.
     JWT_SECRET_KEY: str

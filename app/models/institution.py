@@ -33,6 +33,9 @@ class Institution(Base):
     address = Column(String)
     contact_email = Column(String)
     contact_phone = Column(String)
+    # UPI ID for fee collection via QR at the counter (Phase 1 UPI —
+    # payment confirmation stays manual: receptionist records the UTR).
+    upi_vpa = Column(String)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

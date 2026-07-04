@@ -18,6 +18,7 @@ from app.models.course import Course
 from app.models.fee_payment import FeePayment
 from app.models.institution import Institution
 from app.models.student import Student
+from app.models.student_course import StudentCourse
 from app.schemas.student import FeePaymentCreate, FeePaymentResponse
 from app.services.pdf_service import generate_payment_receipt
 from app.tenancy import TenantContext, get_tenant
@@ -166,6 +167,80 @@ def get_student_payment_summary(
         "student_id": student_id,
         "student_name": student.user.full_name if student.user else None,
         "courses": result,
+    }
+
+
+@router.get(
+    "/my/summary",
+    dependencies=[Depends(require_roles(["student"]))],
+)
+def get_my_payment_summary(ctx: TenantContext = Depends(get_tenant)):
+    """
+    The logged-in student's own fee position, computed over ENROLLMENTS
+    (not payments), so a course with zero payments still shows its full
+    balance. Also returns the recent payment rows for the history list.
+    """
+    student = ctx.q(Student).filter(Student.user_id == ctx.user.id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="No student record for this account")
+
+    enrollments = (
+        ctx.db.query(StudentCourse)
+        .options(joinedload(StudentCourse.course))
+        .filter(StudentCourse.student_id == student.id)
+        .all()
+    )
+    paid_by_course = dict(
+        ctx.db.query(FeePayment.course_id, func.sum(FeePayment.amount))
+        .filter(FeePayment.student_id == student.id)
+        .group_by(FeePayment.course_id)
+        .all()
+    )
+
+    courses = []
+    total_balance = 0.0
+    for enrollment in enrollments:
+        course = enrollment.course
+        if course is None:
+            continue
+        total_fee = float(course.fee_amount or 0)
+        total_paid = float(paid_by_course.get(course.id) or 0)
+        balance = max(total_fee - total_paid, 0.0)
+        total_balance += balance
+        courses.append({
+            "course_id": course.id,
+            "course_name": course.name,
+            "total_fee": total_fee,
+            "total_paid": total_paid,
+            "balance": balance,
+            "status": "paid" if balance <= 0 else "pending",
+        })
+
+    recent_payments = (
+        ctx.db.query(FeePayment)
+        .options(joinedload(FeePayment.course))
+        .filter(FeePayment.student_id == student.id)
+        .order_by(FeePayment.paid_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    return {
+        "student_id": student.id,
+        "student_code": student.student_id,
+        "total_balance": total_balance,
+        "courses": courses,
+        "recent_payments": [
+            {
+                "id": p.id,
+                "amount": float(p.amount),
+                "paid_at": p.paid_at.isoformat() if p.paid_at else None,
+                "payment_method": p.payment_method,
+                "receipt_number": p.receipt_number,
+                "course_name": p.course.name if p.course else None,
+            }
+            for p in recent_payments
+        ],
     }
 
 

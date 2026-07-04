@@ -11,31 +11,48 @@ from app.routes import exams, student_exams, exam_verification, chatbot, batches
 # NOTE (F-09): no Base.metadata.create_all here. The schema is created by
 # Alembic only: `alembic upgrade head` against a fresh database.
 
-# Initialize FastAPI app
+_IS_PROD = settings.ENVIRONMENT == "production"
+
+# Initialize FastAPI app. The interactive docs expose the full API surface,
+# so they are dev-only.
 app = FastAPI(
     title="Education Management API",
     description="Multi-tenant education management platform API",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url=None if _IS_PROD else "/docs",
+    redoc_url=None if _IS_PROD else "/redoc",
+    openapi_url=None if _IS_PROD else "/openapi.json",
 )
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if _IS_PROD:
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    return response
+
 
 # Configure CORS - MUST be before route includes.
 # FRONTEND_URL covers the split deployment (frontend and backend on different
 # origins). In the RECOMMENDED prod setup the Next.js app proxies /api/*
 # to this backend via a rewrite (see docs/07-DEPLOYMENT.md), so every request
 # is same-origin and CORS never comes into play — this list is then inert.
+# Dev origins are only allowed outside production.
+_cors_origins = [settings.FRONTEND_URL] if _IS_PROD else [
+    "http://localhost:3000",
+    "http://localhost:3100",  # run-dev.sh default
+    settings.FRONTEND_URL,
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",  # Add port 3002
-        "http://localhost:3003",
-        settings.FRONTEND_URL
-    ],
+    allow_origins=[o for o in _cors_origins if o],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Mount static files directory for LOCAL file storage only (dev).

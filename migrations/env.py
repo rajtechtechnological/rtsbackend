@@ -19,9 +19,7 @@ target_metadata = Base.metadata
 
 def get_url() -> str:
     """Resolve the database URL exactly like the app does (app/database.py)."""
-    if settings.USE_LOCAL_DB:
-        return settings.LOCAL_DB_URL
-    return settings.SUPABASE_URL.replace("https://", "postgresql://")
+    return settings.DATABASE_URL or settings.LOCAL_DB_URL
 
 
 def run_migrations_offline() -> None:

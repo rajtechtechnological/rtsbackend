@@ -11,6 +11,8 @@ class InstitutionBase(BaseModel):
     address: Optional[str] = None
     contact_email: Optional[EmailStr] = None
     contact_phone: Optional[str] = None
+    # UPI ID (e.g. rajtech@ybl) used for the fee-collection QR
+    upi_vpa: Optional[str] = Field(None, pattern=r"^[\w.\-]{2,64}@[a-zA-Z]{2,32}$")
 
 
 class InstitutionCreate(InstitutionBase):
@@ -24,6 +26,7 @@ class InstitutionUpdate(BaseModel):
     address: Optional[str] = None
     contact_email: Optional[EmailStr] = None
     contact_phone: Optional[str] = None
+    upi_vpa: Optional[str] = Field(None, pattern=r"^[\w.\-]{2,64}@[a-zA-Z]{2,32}$")
 
 
 class InstitutionStatusUpdate(BaseModel):

@@ -19,14 +19,16 @@ Creates:
 - 5 demo students with enrollments and fee payments
 """
 
-from datetime import date, time, datetime
+import secrets
+from datetime import date, time, datetime, timedelta
 from decimal import Decimal
 
 from app.database import SessionLocal
 from app import ids
 from app.models import (
-    Batch, Course, CourseModule, FeePayment, Institution, Staff, Student,
-    StudentCourse, User,
+    Batch, Certificate, Course, CourseModule, FeePayment, Institution,
+    PayrollRecord, Staff, StaffAttendance, Student, StudentCourse,
+    StudentModuleProgress, User,
 )
 from app.services.auth_service import hash_password
 
@@ -109,11 +111,140 @@ DEMO_STUDENTS = [
 DEFAULT_PASSWORD_NOTE = "password = phone number (staff & students), admin123 (super_admin)"
 
 
+def seed_activity(db):
+    """
+    Seed the activity tables the UI reads (attendance, payroll, module
+    progress, certificates) so no screen has to fall back to mock data.
+    Idempotent: each block is skipped if its table already has rows.
+    Assumes the base seed (institution/staff/students/courses) exists.
+    """
+    institution = db.query(Institution).first()
+    manager = db.query(User).filter(User.email == "manager@rajtech.com").first()
+    staff_rows = db.query(Staff).all()
+    today = date.today()
+
+    # ------------------------------------------------------------------
+    # A. Staff attendance: the last 30 days for every staff member
+    # ------------------------------------------------------------------
+    if db.query(StaffAttendance).first() is None:
+        # Deterministic pattern instead of random: mostly present, one
+        # half day and one leave per staff member, absent on Sundays.
+        for s_idx, staff in enumerate(staff_rows):
+            for d in range(30):
+                day = today - timedelta(days=d)
+                if day.weekday() == 6:  # Sunday — no record
+                    continue
+                if d == 7 + s_idx:
+                    status = "half_day"
+                elif d == 15 + s_idx:
+                    status = "leave"
+                else:
+                    status = "present"
+                db.add(StaffAttendance(
+                    institution_id=institution.id,
+                    staff_id=staff.id,
+                    date=day,
+                    status=status,
+                    marked_by=manager.id if manager else None,
+                ))
+        print(f"  activity:     attendance for {len(staff_rows)} staff × ~26 days")
+
+    # ------------------------------------------------------------------
+    # B. Payroll: the three months before the current one
+    # ------------------------------------------------------------------
+    if db.query(PayrollRecord).first() is None:
+        for staff in staff_rows:
+            for back in range(1, 4):
+                m, y = today.month - back, today.year
+                if m < 1:
+                    m, y = m + 12, y - 1
+                days_present, days_half = 24 - back, 1
+                total = staff.daily_rate * days_present + (staff.daily_rate / 2) * days_half
+                db.add(PayrollRecord(
+                    institution_id=institution.id,
+                    staff_id=staff.id,
+                    month=m,
+                    year=y,
+                    days_present=days_present,
+                    days_half=days_half,
+                    total_amount=total,
+                ))
+        print(f"  activity:     payroll for {len(staff_rows)} staff × 3 months")
+
+    # ------------------------------------------------------------------
+    # C. Module progress: first modules completed, the next in progress
+    # ------------------------------------------------------------------
+    if db.query(StudentModuleProgress).first() is None:
+        enrollments = db.query(StudentCourse).all()
+        now = datetime.now()
+        for e_idx, enrollment in enumerate(enrollments):
+            modules = (
+                db.query(CourseModule)
+                .filter(CourseModule.course_id == enrollment.course_id)
+                .order_by(CourseModule.order_index)
+                .all()
+            )
+            # Stagger completion so the demo shows varied progress.
+            completed_count = min(1 + e_idx, max(len(modules) - 1, 0))
+            for m_idx, module in enumerate(modules):
+                if m_idx < completed_count:
+                    marks = 62 + (7 * (m_idx + e_idx)) % 35  # 62..96, passing
+                    db.add(StudentModuleProgress(
+                        student_id=enrollment.student_id,
+                        course_id=enrollment.course_id,
+                        module_id=module.id,
+                        enrollment_id=enrollment.id,
+                        status="completed",
+                        marks_obtained=marks,
+                        passed=True,
+                        marked_by=manager.id if manager else None,
+                        started_at=now - timedelta(days=40 - m_idx * 10),
+                        completed_at=now - timedelta(days=30 - m_idx * 10),
+                    ))
+                elif m_idx == completed_count:
+                    db.add(StudentModuleProgress(
+                        student_id=enrollment.student_id,
+                        course_id=enrollment.course_id,
+                        module_id=module.id,
+                        enrollment_id=enrollment.id,
+                        status="in_progress",
+                        started_at=now - timedelta(days=5),
+                    ))
+                # later modules stay not_started (no row needed)
+        print(f"  activity:     module progress for {len(enrollments)} enrollments")
+
+    # ------------------------------------------------------------------
+    # D. One issued certificate (Rahul paid his DCA fee in full)
+    # ------------------------------------------------------------------
+    if db.query(Certificate).first() is None:
+        rahul_user = db.query(User).filter(User.email == "rahul@student.rts.com").first()
+        if rahul_user:
+            rahul = db.query(Student).filter(Student.user_id == rahul_user.id).first()
+            enrollment = (
+                db.query(StudentCourse).filter(StudentCourse.student_id == rahul.id).first()
+                if rahul else None
+            )
+            if enrollment:
+                db.add(Certificate(
+                    institution_id=institution.id,
+                    student_id=rahul.id,
+                    course_id=enrollment.course_id,
+                    certificate_number=ids.certificate_number(db, institution, today.year),
+                    verification_code=secrets.token_hex(8),
+                    issue_date=today,
+                ))
+                print("  activity:     1 certificate (rahul@student.rts.com)")
+
+    db.commit()
+
+
 def seed():
     db = SessionLocal()
     try:
         if db.query(User).filter(User.email == SUPER_ADMIN_EMAIL).first():
-            print("Database already seeded (super_admin exists) — nothing to do.")
+            print("Base data already seeded (super_admin exists).")
+            seed_activity(db)
+            print("Seed complete.")
             return
 
         # ------------------------------------------------------------------
@@ -168,6 +299,7 @@ def seed():
             address="Bihar Sharif, Nalanda",
             contact_email="director@rajtech.com",
             contact_phone="9800000001",
+            upi_vpa="rajtech.demo@ybl",  # demo VPA for the fee-collection QR
         )
         db.add(institution)
         db.flush()
@@ -262,6 +394,8 @@ def seed():
                 ))
 
         db.commit()
+
+        seed_activity(db)
 
         print("Seed complete.")
         print(f"  super_admin:  {SUPER_ADMIN_EMAIL} / {SUPER_ADMIN_PASSWORD}")

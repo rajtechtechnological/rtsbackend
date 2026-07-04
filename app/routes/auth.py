@@ -11,6 +11,8 @@ Authentication (docs/01 §5, F-11/F-12).
   flows).
 """
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -37,6 +39,12 @@ router = APIRouter()
 REFRESH_COOKIE_NAME = "refresh_token"
 # Cookie is only ever needed by the auth endpoints themselves.
 REFRESH_COOKIE_PATH = "/api/auth"
+
+# Brute-force lockout: after MAX_FAILED_LOGINS consecutive failures the
+# account is locked for LOCKOUT_MINUTES. Stored on the user row so it works
+# across serverless instances (an in-memory limiter would not).
+MAX_FAILED_LOGINS = 5
+LOCKOUT_MINUTES = 15
 
 
 def _set_refresh_cookie(response: Response, raw_token: str) -> None:
@@ -126,12 +134,37 @@ def login(credentials: UserLogin, response: Response, db: Session = Depends(get_
     """
     user = db.query(User).filter(User.email == credentials.email).first()
 
-    if not user or not verify_password(credentials.password, user.hashed_password):
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    now = datetime.now(timezone.utc)
+    if user.locked_until and user.locked_until > now:
+        remaining = int((user.locked_until - now).total_seconds() // 60) + 1
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed attempts. Try again in {remaining} minutes.",
+        )
+
+    if not verify_password(credentials.password, user.hashed_password):
+        user.failed_login_count = (user.failed_login_count or 0) + 1
+        if user.failed_login_count >= MAX_FAILED_LOGINS:
+            user.locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
+            user.failed_login_count = 0
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Successful password check: clear any lockout state.
+    if user.failed_login_count or user.locked_until:
+        user.failed_login_count = 0
+        user.locked_until = None
 
     if not user.is_active:
         raise HTTPException(

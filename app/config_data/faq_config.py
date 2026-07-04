@@ -1,6 +1,6 @@
 """
 FAQ Configuration for RTS Chatbot
-Predefined questions and answers for common queries
+Predefined questions and answers for common queries — English and Hindi.
 """
 
 FAQ_DATABASE = [
@@ -34,7 +34,24 @@ FAQ_DATABASE = [
 
 4. Login and change your password
 
-Note: Students cannot self-register. Contact your institution for enrollment."""
+Note: Students cannot self-register. Contact your institution for enrollment.""",
+        "answer_hi": """नए छात्र के रूप में पंजीकरण करने के लिए:
+
+1. अपनी संस्था से संपर्क करें (स्टाफ मैनेजर, अकाउंटेंट या निदेशक आपको पंजीकृत करेंगे)
+2. उन्हें आपकी निम्नलिखित जानकारी चाहिए होगी:
+   - पूरा नाम, ईमेल, फ़ोन नंबर
+   - जन्म तिथि, पता
+   - पिता/अभिभावक का नाम और फ़ोन
+   - आधार नंबर, अंतिम योग्यता
+   - बैच विवरण (समय, माह, वर्ष)
+
+3. आपको प्राप्त होगा:
+   - छात्र ID (प्रारूप: RTS-DISTRICT-INST-MM-YYYY-NNNN)
+   - लॉगिन क्रेडेंशियल (ईमेल और फ़ोन नंबर पासवर्ड के रूप में)
+
+4. लॉगिन करें और अपना पासवर्ड बदलें
+
+नोट: छात्र स्वयं पंजीकरण नहीं कर सकते। नामांकन के लिए अपनी संस्था से संपर्क करें।"""
     },
     {
         "id": "reg_002",
@@ -57,7 +74,20 @@ Components:
 - YYYY: Enrollment year
 - NNNN: Sequential number (0001, 0002, etc.)
 
-This ID is automatically generated during registration."""
+This ID is automatically generated during registration.""",
+        "answer_hi": """छात्र ID प्रारूप: RTS-DISTRICT-INST-MM-YYYY-NNNN
+
+उदाहरण: RTS-NAL-RCC-12-2025-0001
+
+घटक:
+- RTS: प्लेटफ़ॉर्म उपसर्ग
+- DISTRICT: जिला कोड (जैसे NAL नालंदा के लिए)
+- INST: संस्था के आद्याक्षर (जैसे RCC राजटेक कंप्यूटर सेंटर के लिए)
+- MM: नामांकन माह (01-12)
+- YYYY: नामांकन वर्ष
+- NNNN: क्रमांक (0001, 0002, आदि)
+
+यह ID पंजीकरण के दौरान स्वचालित रूप से बनाई जाती है।"""
     },
 
     # Courses
@@ -94,7 +124,30 @@ This ID is automatically generated during registration."""
    - 7 modules, 147 lessons
    - Office productivity focus
 
-Each course includes structured modules, examinations, and certificate upon completion."""
+Each course includes structured modules, examinations, and certificate upon completion.""",
+        "answer_hi": """उपलब्ध कोर्स:
+
+1. **ADCA** - कंप्यूटर एप्लीकेशन में एडवांस्ड डिप्लोमा
+   - अवधि: 12-18 माह
+   - 13 मॉड्यूल, 363 पाठ
+   - व्यापक कंप्यूटर प्रशिक्षण
+
+2. **HDIT** - हार्डवेयर और IT तकनीशियन
+   - अवधि: 12 माह
+   - 11 मॉड्यूल, 308 पाठ
+   - हार्डवेयर और नेटवर्किंग फ़ोकस
+
+3. **DCA** - कंप्यूटर एप्लीकेशन में डिप्लोमा
+   - अवधि: 6-12 माह
+   - 7 मॉड्यूल, 188 पाठ
+   - बुनियादी कंप्यूटर कौशल
+
+4. **DOARM** - ऑफिस ऑटोमेशन और रिकॉर्ड मैनेजमेंट में डिप्लोमा
+   - अवधि: 6-12 माह
+   - 7 मॉड्यूल, 147 पाठ
+   - कार्यालय उत्पादकता फ़ोकस
+
+प्रत्येक कोर्स में संरचित मॉड्यूल, परीक्षाएं और पूर्णता पर प्रमाण पत्र शामिल हैं।"""
     },
 
     # Payments
@@ -128,7 +181,27 @@ Payment Methods:
 - Online/UPI/Card: Transaction ID required
 - Bank Transfer: Provide transfer details
 
-You can view payment history and balance in your student dashboard."""
+You can view payment history and balance in your student dashboard.""",
+        "answer_hi": """फ़ीस भुगतान करने के लिए:
+
+1. अपनी संस्था के कार्यालय में जाएं
+2. रिसेप्शनिस्ट/अकाउंटेंट को अपना छात्र ID दें
+3. भुगतान विधि चुनें:
+   - नकद
+   - ऑनलाइन भुगतान
+   - UPI (ट्रांज़ेक्शन ID आवश्यक)
+   - कार्ड (ट्रांज़ेक्शन ID आवश्यक)
+   - बैंक ट्रांसफर
+
+4. अनोखे रसीद नंबर के साथ भुगतान रसीद प्राप्त करें
+5. अपने डैशबोर्ड से PDF रसीद डाउनलोड करें
+
+भुगतान विधियां:
+- नकद: कार्यालय में सीधा भुगतान
+- ऑनलाइन/UPI/कार्ड: ट्रांज़ेक्शन ID आवश्यक
+- बैंक ट्रांसफर: ट्रांसफर विवरण प्रदान करें
+
+आप अपने छात्र डैशबोर्ड में भुगतान इतिहास और बैलेंस देख सकते हैं।"""
     },
     {
         "id": "pay_002",
@@ -152,7 +225,20 @@ You can view payment history and balance in your student dashboard."""
    - Amount paid
    - Remaining balance
 
-You can also download PDF receipts for each payment from this section."""
+You can also download PDF receipts for each payment from this section.""",
+        "answer_hi": """अपना भुगतान इतिहास देखने के लिए:
+
+1. अपने छात्र डैशबोर्ड में लॉगिन करें
+2. "Payments" अनुभाग पर जाएं
+3. आप देखेंगे:
+   - तारीखों के साथ सभी भुगतान रिकॉर्ड
+   - रसीद नंबर
+   - उपयोग की गई भुगतान विधियां
+   - प्रत्येक कोर्स के लिए कुल फ़ीस
+   - भुगतान की गई राशि
+   - शेष बैलेंस
+
+आप इस अनुभाग से प्रत्येक भुगतान की PDF रसीद भी डाउनलोड कर सकते हैं।"""
     },
 
     # Examinations
@@ -191,7 +277,32 @@ You can also download PDF receipts for each payment from this section."""
 - Passing marks: 40% minimum
 - Results require staff verification
 
-Check your dashboard for upcoming scheduled exams."""
+Check your dashboard for upcoming scheduled exams.""",
+        "answer_hi": """परीक्षा प्रणाली:
+
+**परीक्षा के प्रकार:**
+- प्रत्येक कोर्स मॉड्यूल के लिए मॉड्यूल परीक्षाएं
+- आंतरिक मूल्यांकन
+- अंतिम परीक्षाएं
+- प्रायोगिक परीक्षाएं
+
+**प्रक्रिया:**
+1. प्रशासकों द्वारा आपके बैच के लिए परीक्षाएं निर्धारित की जाती हैं
+2. आपको परीक्षा कार्यक्रम की सूचना मिलती है
+3. निर्धारित समय के दौरान छात्र डैशबोर्ड से परीक्षा में प्रवेश करें
+4. समय सीमा के भीतर MCQ प्रश्न पूरे करें (आमतौर पर 60 मिनट)
+5. समय समाप्त होने से पहले सबमिट करें
+6. परिणाम स्टाफ द्वारा सत्यापित किए जाते हैं
+7. सत्यापन के बाद अंक देखें
+
+**विशेषताएं:**
+- बहुविकल्पीय प्रश्न (A, B, C, D)
+- प्रश्न और विकल्प फेरबदल किए जाते हैं
+- समयबद्ध परीक्षाएं
+- उत्तीर्ण अंक: न्यूनतम 40%
+- परिणामों के लिए स्टाफ सत्यापन आवश्यक
+
+आगामी निर्धारित परीक्षाओं के लिए अपना डैशबोर्ड देखें।"""
     },
     {
         "id": "exam_002",
@@ -214,7 +325,20 @@ This means:
 - Results are verified by staff before being final
 - Failed modules can typically be retaken (check with institution)
 
-Your marks and pass/fail status will be visible in your dashboard after staff verification."""
+Your marks and pass/fail status will be visible in your dashboard after staff verification.""",
+        "answer_hi": """उत्तीर्ण अंक: **न्यूनतम 40%**
+
+इसका अर्थ है:
+- यदि कुल अंक = 100, तो उत्तीर्ण होने के लिए 40 अंक चाहिए
+- यदि कुल अंक = 50, तो उत्तीर्ण होने के लिए 20 अंक चाहिए
+
+**महत्वपूर्ण:**
+- उत्तीर्ण अंक कोर्स/मॉड्यूल के अनुसार थोड़ा भिन्न हो सकते हैं
+- विशिष्ट मॉड्यूल आवश्यकताएं जांचें
+- परिणाम अंतिम होने से पहले स्टाफ द्वारा सत्यापित किए जाते हैं
+- असफल मॉड्यूल आमतौर पर दोबारा लिए जा सकते हैं (संस्था से जांचें)
+
+स्टाफ सत्यापन के बाद आपके अंक और उत्तीर्ण/अनुत्तीर्ण स्थिति आपके डैशबोर्ड में दिखाई देगी।"""
     },
 
     # Certificates
@@ -250,7 +374,29 @@ Your marks and pass/fail status will be visible in your dashboard after staff ve
 **Timeline:**
 Certificates are typically generated within 7 days of course completion.
 
-If delayed, contact your institution's accountant or director."""
+If delayed, contact your institution's accountant or director.""",
+        "answer_hi": """अपना प्रमाण पत्र पाने के लिए:
+
+**आवश्यकताएं:**
+1. सभी कोर्स मॉड्यूल पूरे करें
+2. सभी मॉड्यूल परीक्षाएं उत्तीर्ण करें (न्यूनतम 40%)
+3. सभी फ़ीस भुगतान पूरा करें (कोई बकाया नहीं)
+4. आवश्यक उपस्थिति बनाए रखें (यदि लागू हो)
+
+**प्रक्रिया:**
+1. सभी आवश्यकताएं पूरी होने के बाद, निदेशक/अकाउंटेंट द्वारा प्रमाण पत्र बनाया जाता है
+2. आपको सूचना मिलेगी
+3. अपने डैशबोर्ड से PDF प्रमाण पत्र डाउनलोड करें
+4. प्रमाण पत्र में शामिल है:
+   - अनोखा प्रमाण पत्र नंबर
+   - आपका नाम और कोर्स विवरण
+   - जारी तिथि
+   - सत्यापन के लिए QR कोड
+
+**समय-सीमा:**
+प्रमाण पत्र आमतौर पर कोर्स पूरा होने के 7 दिनों के भीतर बनाया जाता है।
+
+यदि देरी हो, तो अपनी संस्था के अकाउंटेंट या निदेशक से संपर्क करें।"""
     },
 
     # Attendance
@@ -283,7 +429,27 @@ If delayed, contact your institution's accountant or director."""
 - Report discrepancies to staff manager within 7 days
 - Attendance policy varies by institution
 
-Check your student dashboard for detailed attendance records."""
+Check your student dashboard for detailed attendance records.""",
+        "answer_hi": """उपस्थिति ट्रैकिंग:
+
+**छात्रों के लिए:**
+- उपस्थिति स्टाफ/शिक्षकों द्वारा दर्ज की जाती है
+- डैशबोर्ड में अपने उपस्थिति रिकॉर्ड देखें
+- उपस्थिति प्रतिशत जांचें
+- कम उपस्थिति के लिए अलर्ट मिल सकते हैं
+
+**उपस्थिति स्थिति:**
+- उपस्थित: पूर्ण उपस्थिति
+- अनुपस्थित: उपस्थित नहीं
+- अर्ध दिवस: आंशिक उपस्थिति
+- अवकाश: स्वीकृत छुट्टी
+
+**महत्वपूर्ण:**
+- कुछ कोर्स में परीक्षा पात्रता के लिए न्यूनतम उपस्थिति आवश्यक हो सकती है
+- 7 दिनों के भीतर स्टाफ मैनेजर को विसंगतियों की रिपोर्ट करें
+- उपस्थिति नीति संस्था के अनुसार भिन्न होती है
+
+विस्तृत उपस्थिति रिकॉर्ड के लिए अपना छात्र डैशबोर्ड देखें।"""
     },
 
     # Login & Access
@@ -314,7 +480,24 @@ Check your student dashboard for detailed attendance records."""
 - Don't share credentials
 - Logout from shared devices
 
-If account is inactive, contact your institution director."""
+If account is inactive, contact your institution director.""",
+        "answer_hi": """यदि आप अपना पासवर्ड भूल गए हैं:
+
+1. **डिफ़ॉल्ट पासवर्ड:** नए छात्रों के लिए, डिफ़ॉल्ट पासवर्ड आपका फ़ोन नंबर है
+2. **पासवर्ड भूले:** लॉगिन पेज पर "Forgot Password" पर क्लिक करें (यदि उपलब्ध हो)
+3. **संस्था से संपर्क करें:** पासवर्ड रीसेट के लिए अपनी संस्था के एडमिन/निदेशक से संपर्क करें
+
+**लॉगिन क्रेडेंशियल:**
+- उपयोगकर्ता नाम: आपका ईमेल पता
+- पासवर्ड: फ़ोन नंबर (डिफ़ॉल्ट) या आपका बदला हुआ पासवर्ड
+
+**सुरक्षा सुझाव:**
+- पहली लॉगिन के बाद डिफ़ॉल्ट पासवर्ड बदलें
+- मजबूत पासवर्ड का उपयोग करें
+- क्रेडेंशियल साझा न करें
+- साझा उपकरणों से लॉगआउट करें
+
+यदि खाता निष्क्रिय है, तो अपनी संस्था के निदेशक से संपर्क करें।"""
     },
     {
         "id": "login_002",
@@ -347,7 +530,29 @@ If account is inactive, contact your institution director."""
 - Check if account is active
 - Contact institution if issues persist
 
-Access the platform at your institution's provided URL."""
+Access the platform at your institution's provided URL.""",
+        "answer_hi": """आपके लॉगिन क्रेडेंशियल:
+
+**उपयोगकर्ता नाम:** आपका ईमेल पता (पंजीकरण के दौरान प्रदान किया गया)
+
+**पासवर्ड:**
+- डिफ़ॉल्ट: आपका फ़ोन नंबर
+- सुरक्षा के लिए पहली लॉगिन के बाद बदलें
+
+**लॉगिन प्रक्रिया:**
+1. लॉगिन पेज पर जाएं
+2. उपयोगकर्ता नाम के रूप में ईमेल दर्ज करें
+3. पासवर्ड दर्ज करें (पहली बार के लिए फ़ोन नंबर)
+4. लॉगिन पर क्लिक करें
+5. प्रोफ़ाइल सेटिंग्स में पासवर्ड बदलें
+
+**समस्या निवारण:**
+- सुनिश्चित करें कि ईमेल सही है
+- पासवर्ड के रूप में फ़ोन नंबर आज़माएं
+- जांचें कि खाता सक्रिय है
+- समस्या बनी रहने पर संस्था से संपर्क करें
+
+अपनी संस्था द्वारा प्रदान किए गए URL पर प्लेटफ़ॉर्म एक्सेस करें।"""
     },
 
     # Dashboard & Features
@@ -396,7 +601,43 @@ Access the platform at your institution's provided URL."""
 - Change password
 - View student ID
 
-Navigate through the menu to access different sections."""
+Navigate through the menu to access different sections.""",
+        "answer_hi": """छात्र डैशबोर्ड की विशेषताएं:
+
+**अवलोकन:**
+- आपकी प्रोफ़ाइल जानकारी
+- नामांकित कोर्स
+- समग्र प्रगति
+
+**कोर्स:**
+- नामांकित कोर्स देखें
+- मॉड्यूल-वार प्रगति
+- पूर्णता प्रतिशत
+- प्राप्त अंक
+
+**भुगतान:**
+- भुगतान इतिहास
+- लंबित फ़ीस
+- रसीद डाउनलोड करें
+- बैलेंस जानकारी
+
+**परीक्षाएं:**
+- निर्धारित परीक्षाएं
+- ऑनलाइन परीक्षाएं दें
+- परिणाम देखें
+- परीक्षा इतिहास
+
+**प्रमाण पत्र:**
+- प्रमाण पत्र डाउनलोड करें
+- प्रमाण पत्र विवरण देखें
+- सत्यापन QR कोड
+
+**प्रोफ़ाइल:**
+- व्यक्तिगत जानकारी अपडेट करें
+- पासवर्ड बदलें
+- छात्र ID देखें
+
+विभिन्न अनुभागों तक पहुंचने के लिए मेनू में नेविगेट करें।"""
     },
 
     # Roles & Access
@@ -445,7 +686,43 @@ Navigate through the menu to access different sections."""
    - Take exams
    - Access materials
 
-Each role has specific permissions for data security."""
+Each role has specific permissions for data security.""",
+        "answer_hi": """RTS में उपयोगकर्ता भूमिकाएं:
+
+1. **सुपर एडमिन (सिस्टम निदेशक)**
+   - पूर्ण सिस्टम एक्सेस
+   - सभी संस्थाओं का प्रबंधन
+
+2. **संस्था निदेशक**
+   - अपनी संस्था तक पूर्ण एक्सेस
+   - स्टाफ और छात्रों का प्रबंधन
+   - स्टाफ दरें निर्धारित करता है
+
+3. **अकाउंटेंट**
+   - अंक दर्ज करें
+   - भुगतान प्रबंधित करें
+   - रिपोर्ट बनाएं
+
+4. **रिसेप्शनिस्ट**
+   - केवल भुगतान रिकॉर्ड करें
+   - रसीद बनाएं
+
+5. **स्टाफ मैनेजर**
+   - छात्रों और स्टाफ का प्रबंधन
+   - उपस्थिति दर्ज करें
+   - दैनिक संचालन
+
+6. **स्टाफ**
+   - उपस्थिति दर्ज करें
+   - छात्र देखें
+   - सीमित एक्सेस
+
+7. **छात्र**
+   - अपना डेटा देखें
+   - परीक्षा दें
+   - सामग्री एक्सेस करें
+
+डेटा सुरक्षा के लिए प्रत्येक भूमिका के पास विशिष्ट अनुमतियां हैं।"""
     },
 
     # Technical Support
@@ -463,8 +740,8 @@ Each role has specific permissions for data security."""
         "answer": """Getting Help:
 
 **In-App Support:**
-- Use this AI chatbot (Raj) for instant answers
-- Available 24/7 in bottom-right corner
+- Use this chatbot (Raj) for instant answers
+- Available 24/7 in your dashboard
 
 **Institution Support:**
 - Contact your institution director
@@ -483,7 +760,31 @@ Each role has specific permissions for data security."""
 - Check internet connection
 - Contact institution admin
 
-For urgent matters, visit your institution office directly."""
+For urgent matters, visit your institution office directly.""",
+        "answer_hi": """सहायता प्राप्त करना:
+
+**इन-ऐप सहायता:**
+- तत्काल उत्तरों के लिए इस चैटबॉट (राज) का उपयोग करें
+- आपके डैशबोर्ड में 24/7 उपलब्ध
+
+**संस्था सहायता:**
+- अपने संस्था निदेशक से संपर्क करें
+- भुगतान समस्याओं के लिए अकाउंटेंट से संपर्क करें
+- सामान्य प्रश्नों के लिए स्टाफ मैनेजर से संपर्क करें
+
+**सामान्य समस्याएं:**
+- लॉगिन समस्याएं: पासवर्ड के रूप में फ़ोन नंबर आज़माएं
+- भुगतान समस्याएं: रिसेप्शनिस्ट/अकाउंटेंट से संपर्क करें
+- प्रमाण पत्र में देरी: अकाउंटेंट से संपर्क करें
+- उपस्थिति समस्याएं: 7 दिनों के भीतर स्टाफ मैनेजर को रिपोर्ट करें
+
+**तकनीकी समस्याएं:**
+- ब्राउज़र कैश साफ़ करें
+- अलग ब्राउज़र आज़माएं
+- इंटरनेट कनेक्शन जांचें
+- संस्था एडमिन से संपर्क करें
+
+अत्यावश्यक मामलों के लिए, सीधे अपनी संस्था के कार्यालय में जाएं।"""
     },
 
     # Progress Tracking
@@ -525,7 +826,35 @@ For urgent matters, visit your institution office directly."""
 - Pass/Fail status
 - Exam date
 
-Your progress is updated after each module exam is verified by staff."""
+Your progress is updated after each module exam is verified by staff.""",
+        "answer_hi": """अपनी प्रगति ट्रैक करना:
+
+**छात्र डैशबोर्ड में:**
+1. "Courses" अनुभाग पर जाएं
+2. अपना नामांकित कोर्स चुनें
+3. मॉड्यूल-वार प्रगति देखें
+
+**प्रगति जानकारी:**
+- कोर्स में कुल मॉड्यूल
+- पूर्ण किए गए मॉड्यूल
+- प्रगति में मॉड्यूल
+- शुरू न किए गए मॉड्यूल
+- समग्र पूर्णता प्रतिशत
+- प्रत्येक मॉड्यूल में प्राप्त अंक
+
+**मॉड्यूल स्थिति:**
+- **शुरू नहीं:** मॉड्यूल अभी शुरू नहीं हुआ
+- **प्रगति में:** वर्तमान में अध्ययन कर रहे हैं
+- **पूर्ण:** मॉड्यूल परीक्षा उत्तीर्ण
+- **असफल:** उत्तीर्ण नहीं हुए (दोबारा ले सकते हैं)
+
+**अंक प्रदर्शन:**
+- प्राप्त अंक / कुल अंक
+- प्रतिशत
+- उत्तीर्ण/अनुत्तीर्ण स्थिति
+- परीक्षा तिथि
+
+स्टाफ द्वारा प्रत्येक मॉड्यूल परीक्षा सत्यापित होने के बाद आपकी प्रगति अपडेट होती है।"""
     }
 ]
 
@@ -588,5 +917,3 @@ def search_faq(query: str, threshold: float = 0.3):
     # Sort by confidence
     results.sort(key=lambda x: x["confidence"], reverse=True)
     return results
-
-# Made with Bob
