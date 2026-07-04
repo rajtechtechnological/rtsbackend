@@ -18,7 +18,11 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS - MUST be before route includes
+# Configure CORS - MUST be before route includes.
+# FRONTEND_URL covers the split deployment (frontend and backend on different
+# origins). In the RECOMMENDED prod setup the Next.js app proxies /api/*
+# to this backend via a rewrite (see docs/07-DEPLOYMENT.md), so every request
+# is same-origin and CORS never comes into play — this list is then inert.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -34,7 +38,10 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-# Mount static files directory for local file storage
+# Mount static files directory for LOCAL file storage only (dev).
+# In prod (USE_LOCAL_STORAGE=false on Vercel) there is no writable disk and
+# uploads live in Supabase Storage, served directly from its CDN — this mount
+# must not exist there (docs/01 §2).
 if settings.USE_LOCAL_STORAGE:
     upload_dir = Path(settings.LOCAL_UPLOAD_DIR)
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -70,8 +77,11 @@ def read_root():
 
 @app.get("/health", tags=["Health"])
 def health_check():
+    """Liveness probe. Also the target of the weekly Vercel cron
+    (vercel.json) that keeps the Supabase free project from pausing after
+    ~7 days of inactivity (docs/01 §2)."""
     return {
         "status": "healthy",
-        "database": "local" if settings.USE_LOCAL_DB else "supabase",
-        "storage": "local" if settings.USE_LOCAL_STORAGE else "cloudinary"
+        "database": "supabase" if settings.DATABASE_URL else "local",
+        "storage": "local" if settings.USE_LOCAL_STORAGE else "supabase"
     }

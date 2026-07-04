@@ -40,12 +40,16 @@ REFRESH_COOKIE_PATH = "/api/auth"
 
 
 def _set_refresh_cookie(response: Response, raw_token: str) -> None:
+    # Secure + SameSite=Lax is correct both for direct https access and for
+    # the recommended prod setup where Next.js proxies /api/* to this app
+    # (same-origin, first-party cookie — see docs/07-DEPLOYMENT.md).
+    # REFRESH_COOKIE_SECURE=false is ONLY for local http dev.
     response.set_cookie(
         key=REFRESH_COOKIE_NAME,
         value=raw_token,
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
         httponly=True,
-        secure=True,
+        secure=settings.REFRESH_COOKIE_SECURE,
         samesite="lax",
         path=REFRESH_COOKIE_PATH,
     )
