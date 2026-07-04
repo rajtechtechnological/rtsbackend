@@ -6,17 +6,22 @@ denormalized institution_id, collision-free numbering via id_counters
 
 import secrets
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import joinedload
 from typing import List, Optional
 from uuid import UUID
 from datetime import date
 
+from app.config import settings
 from app.dependencies import require_roles, MANAGER_ROLES, ALL_ROLES
 from app import ids
 from app.models.certificate import Certificate
+from app.models.course import Course
 from app.models.institution import Institution
 from app.models.student import Student
 from app.models.student_course import StudentCourse
 from app.schemas.payroll import CertificateGenerate, CertificateResponse
+from app.services.pdf_service import generate_certificate
 from app.tenancy import TenantContext, get_tenant
 
 router = APIRouter()
@@ -128,3 +133,60 @@ def get_certificate(
             raise HTTPException(status_code=404, detail="Certificate not found")
 
     return certificate
+
+
+@router.get(
+    "/{certificate_id}/certificate.pdf",
+    dependencies=[Depends(require_roles(ALL_ROLES))],
+)
+def download_certificate(
+    certificate_id: UUID,
+    ctx: TenantContext = Depends(get_tenant),
+):
+    """Render and stream the certificate PDF on demand — no stored PDFs
+    (docs/01 §2/§8): always regenerated from DB truth. Tenant-scoped;
+    students may only fetch their OWN certificate. The verification_code is
+    embedded as a QR pointing at the public verify page."""
+    certificate = (
+        ctx.q(Certificate)
+        .options(
+            joinedload(Certificate.student).joinedload(Student.user),
+            joinedload(Certificate.course),
+        )
+        .filter(Certificate.id == certificate_id)
+        .first()
+    )
+    if not certificate:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+
+    if ctx.user.role == "student":
+        own = _own_student_row(ctx)
+        if certificate.student_id != own.id:
+            # Own-records-only: someone else's certificate is a 404
+            raise HTTPException(status_code=404, detail="Certificate not found")
+
+    institution = ctx.db.query(Institution).filter(
+        Institution.id == certificate.institution_id
+    ).first()
+
+    student = certificate.student
+    course = certificate.course
+
+    cert_info = {
+        "institution_name": institution.name if institution else "",
+        "student_name": student.user.full_name if student and student.user else "N/A",
+        "course_name": course.name if course else "N/A",
+        "certificate_number": certificate.certificate_number,
+        "issue_date": certificate.issue_date,
+        "verification_code": certificate.verification_code,
+        # Public QR-verify page served by the frontend
+        "verify_url": f"{settings.FRONTEND_URL.rstrip('/')}/verify/{certificate.verification_code}",
+    }
+
+    pdf_buffer = generate_certificate(cert_info)
+    filename = f"Certificate_{certificate.certificate_number}.pdf"
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )

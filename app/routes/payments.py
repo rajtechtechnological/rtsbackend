@@ -182,14 +182,21 @@ def get_payment(
 
 
 @router.get(
+    "/{payment_id}/receipt.pdf",
+    dependencies=[Depends(require_roles(PAYMENT_ROLES + ["student"]))],
+)
+@router.get(
     "/{payment_id}/receipt",
-    dependencies=[Depends(require_roles(PAYMENT_ROLES))],
+    include_in_schema=False,  # legacy alias for /receipt.pdf
+    dependencies=[Depends(require_roles(PAYMENT_ROLES + ["student"]))],
 )
 def download_receipt(
     payment_id: UUID,
     ctx: TenantContext = Depends(get_tenant),
 ):
-    """Generate and stream the PDF receipt on demand (never stored)."""
+    """Generate and stream the PDF receipt on demand — in-memory only, never
+    written to disk, no stored URL (docs/01 §2). Receptionist+ may print any
+    receipt in their institution; a student may fetch their OWN receipts."""
     payment = (
         ctx.q(FeePayment)
         .options(
@@ -204,6 +211,11 @@ def download_receipt(
         raise HTTPException(status_code=404, detail="Payment not found")
 
     student = payment.student
+
+    # Own-records-only for students: someone else's receipt is a 404
+    if ctx.user.role == "student":
+        if not student or student.user_id != ctx.user.id:
+            raise HTTPException(status_code=404, detail="Payment not found")
     institution = ctx.db.query(Institution).filter(
         Institution.id == payment.institution_id
     ).first()

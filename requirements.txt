@@ -18,14 +18,15 @@ python-dotenv==1.0.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 
-# File Processing
+# File Processing (PDFs streamed in-memory; images resized before upload)
 reportlab==4.0.7
 pillow==10.1.0
+qrcode==7.4.2
 pydantic[email]
-# Production dependencies (install when moving to production)
-# supabase==2.0.3
-# cloudinary==1.36.0
+
+# HTTP client — Supabase Storage REST calls (deliberately no supabase SDK,
+# docs/01 §6) + FastAPI TestClient in tests
+httpx==0.25.1
 
 # Dev / test dependencies
 pytest==7.4.3
-httpx==0.25.1

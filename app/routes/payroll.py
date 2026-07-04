@@ -5,15 +5,19 @@ institution_id so ctx.q and RLS apply directly.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import joinedload
 from typing import List, Optional
 from uuid import UUID
 from decimal import Decimal
 
 from app.dependencies import require_roles, STAFF_ADMIN_ROLES, ALL_STAFF_ROLES, MANAGER_ROLES
+from app.models.institution import Institution
 from app.models.payroll import PayrollRecord
 from app.models.staff import Staff
 from app.routes.attendance import _attendance_summary
 from app.schemas.payroll import PayrollGenerate, PayrollResponse
+from app.services.pdf_service import generate_payslip
 from app.tenancy import TenantContext, get_tenant
 
 router = APIRouter()
@@ -119,16 +123,48 @@ def get_payroll(
     return _get_payroll_scoped(ctx, payroll_id)
 
 
-@router.post(
-    "/{payroll_id}/generate-payslip",
+@router.get(
+    "/{payroll_id}/payslip.pdf",
     dependencies=[Depends(require_roles(ALL_STAFF_ROLES))],
 )
-def generate_payslip(
+def download_payslip(
     payroll_id: UUID,
     ctx: TenantContext = Depends(get_tenant),
 ):
-    """Generate PDF payslip for a payroll record (on demand, never stored)."""
+    """Generate and stream the PDF payslip on demand — in-memory only, never
+    stored (docs/01 §2). Managers may fetch any payslip in their institution;
+    staff/receptionist only their OWN (_get_payroll_scoped)."""
     payroll = _get_payroll_scoped(ctx, payroll_id)
 
-    # TODO: implement PDF generation with ReportLab (streamed, not stored)
-    return {"message": "PDF generation not yet implemented", "payroll_id": str(payroll.id)}
+    staff = (
+        ctx.q(Staff)
+        .options(joinedload(Staff.user))
+        .filter(Staff.id == payroll.staff_id)
+        .first()
+    )
+    institution = ctx.db.query(Institution).filter(
+        Institution.id == payroll.institution_id
+    ).first()
+
+    payslip_info = {
+        "institution_name": institution.name if institution else "",
+        "institution_address": institution.address if institution else "",
+        "institution_phone": institution.contact_phone if institution else "",
+        "staff_name": staff.user.full_name if staff and staff.user else "Staff",
+        "position": staff.position if staff else None,
+        "month": payroll.month,
+        "year": payroll.year,
+        "days_present": payroll.days_present,
+        "days_half": payroll.days_half,
+        "daily_rate": staff.daily_rate if staff else 0,
+        "total_amount": payroll.total_amount,
+        "generated_at": payroll.generated_at,
+    }
+
+    pdf_buffer = generate_payslip(payslip_info)
+    filename = f"Payslip_{payroll.year}_{payroll.month:02d}.pdf"
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
