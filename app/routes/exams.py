@@ -5,13 +5,14 @@ publishing an exam (is_active) and scheduling require staff_manager+.
 Batch targeting lives ONLY on exam_schedules (one row per batch, F-08).
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import joinedload
 from sqlalchemy import func
 from typing import List, Optional
 from uuid import UUID
 
 from app.dependencies import require_roles, MANAGER_ROLES, EXAM_AUTHOR_ROLES
+from app.utils.docx_parser import DocxParseError, extract_docx_lines, parse_questions
 from app.models.batch import Batch
 from app.models.course import Course
 from app.models.course_module import CourseModule
@@ -383,6 +384,61 @@ def add_question(
     ctx.db.commit()
     ctx.db.refresh(new_question)
     return new_question
+
+
+# Word imports are question text only; anything larger is almost certainly
+# the wrong file (embedded images etc. belong in image_url, not the doc).
+MAX_IMPORT_DOCX_BYTES = 2 * 1024 * 1024
+
+
+@router.post(
+    "/{exam_id}/questions/import-docx",
+    dependencies=[Depends(require_roles(EXAM_AUTHOR_ROLES))],
+)
+async def import_questions_docx(
+    exam_id: UUID,
+    file: UploadFile = File(...),
+    ctx: TenantContext = Depends(get_tenant),
+):
+    """Parse a Word (.docx) question paper into importable questions.
+
+    Parse-only preview: nothing is written. The client shows the result to
+    the author, who confirms via POST /{exam_id}/questions/bulk — so a
+    half-broken document never silently imports its broken half.
+    """
+    _get_exam_or_404(ctx, exam_id)  # existence + tenant check
+
+    if file.filename and not file.filename.lower().endswith(".docx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .docx files are supported. Save the document as .docx in Word and retry.",
+        )
+    data = await file.read()
+    if len(data) > MAX_IMPORT_DOCX_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 2 MB)")
+
+    try:
+        lines = extract_docx_lines(data)
+    except DocxParseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    parsed, errors = parse_questions(lines)
+    return {
+        "questions": [
+            {
+                "question_text": q.question_text,
+                "option_a": q.options["A"],
+                "option_b": q.options["B"],
+                "option_c": q.options["C"],
+                "option_d": q.options["D"],
+                "correct_option": q.correct_option,
+                "marks": q.marks,
+                "explanation": q.explanation,
+            }
+            for q in parsed
+        ],
+        "errors": errors,
+    }
 
 
 @router.post(

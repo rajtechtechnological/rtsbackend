@@ -14,10 +14,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.config_data.intents import INTENTS, MENU, get_intent  # noqa: E402
+from app.config_data.intents import INTENTS, MENU, PUBLIC_MENU, get_intent  # noqa: E402
 from app.services.chatbot_engine import (  # noqa: E402
+    handle_public_message,
     match_intent,
     menu_chips,
+    menu_chips_public,
     normalize,
     suggest_intents,
 )
@@ -245,6 +247,67 @@ def test_data_intents_have_registered_handlers():
     for intent in INTENTS:
         if intent.kind == "data":
             assert intent.handler in HANDLERS, f"no handler for {intent.id}"
+
+
+# ---------------------------------------------------------------------------
+# Public (unauthenticated) chatbot — the security boundary that keeps
+# account-specific intents (fee_balance, next_exam, my_result, my_progress,
+# today_collections, student_count, ...) unreachable from the homepage.
+# ---------------------------------------------------------------------------
+NON_PUBLIC_INTENTS = [i.id for i in INTENTS if not i.public]
+
+SENSITIVE_INTENTS = (
+    "fee_balance", "next_exam", "my_result", "my_progress",
+    "today_collections", "student_count",
+)
+
+
+def test_sensitive_intents_are_not_marked_public():
+    for intent_id in SENSITIVE_INTENTS:
+        intent = get_intent(intent_id)
+        assert intent is not None
+        assert not intent.public, f"{intent_id} must never be public"
+
+
+def test_public_message_rejects_every_non_public_intent_id():
+    # db=None: the rejection happens before any handler/DB access.
+    for intent_id in NON_PUBLIC_INTENTS:
+        result = handle_public_message(None, intent_id=intent_id)
+        assert result["source"] == "fallback", f"{intent_id} leaked publicly"
+
+
+def test_public_message_rejects_unknown_intent_id():
+    result = handle_public_message(None, intent_id="not-a-real-intent")
+    assert result["source"] == "fallback"
+
+
+def test_match_intent_public_only_ignores_non_public_intents():
+    # "student count" text would otherwise match student_count for staff.
+    intent = match_intent(normalize("how many students"), "public", public_only=True)
+    assert intent is None or intent.public
+
+
+def test_menu_chips_public_only_public_intents():
+    chips = menu_chips_public()
+    assert chips, "public menu is empty"
+    for chip in chips:
+        intent = get_intent(chip["intent"])
+        assert intent is not None and intent.public
+
+
+def test_public_menu_ids_are_all_marked_public():
+    for intent_id in PUBLIC_MENU:
+        intent = get_intent(intent_id)
+        assert intent is not None
+        assert intent.public, f"PUBLIC_MENU references non-public intent {intent_id}"
+
+
+def test_public_greeting_chips_never_include_non_public_followups():
+    result = handle_public_message(None, text="hello")
+    assert result["source"] == "static:greeting"
+    for chip in result["chips"]:
+        intent = get_intent(chip["intent"])
+        assert intent is not None and intent.public
 
 
 if __name__ == "__main__":

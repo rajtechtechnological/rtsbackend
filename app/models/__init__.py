@@ -13,6 +13,7 @@ from app.models.payroll import PayrollRecord
 from app.models.certificate import Certificate
 from app.models.course_module import CourseModule, StudentModuleProgress
 from app.models.exam import Exam, Question, ExamSchedule, ExamAttempt, StudentAnswer
+from app.models.chatbot_rate_limit import ChatbotRateLimit
 
 __all__ = [
     "User",
@@ -36,4 +37,5 @@ __all__ = [
     "ExamSchedule",
     "ExamAttempt",
     "StudentAnswer",
+    "ChatbotRateLimit",
 ]

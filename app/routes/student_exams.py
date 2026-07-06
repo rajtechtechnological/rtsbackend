@@ -648,3 +648,85 @@ def get_my_results(ctx: TenantContext = Depends(get_tenant)):
         ))
 
     return results
+
+
+@router.get("/attempts/{attempt_id}/review")
+def review_own_attempt(
+    attempt_id: UUID,
+    ctx: TenantContext = Depends(get_tenant),
+):
+    """Question-by-question review of the student's own VERIFIED attempt:
+    their recorded answer next to the correct one, plus the explanation.
+
+    This is the deliberate exception to F-14: correct_option/explanation may
+    be shown here because the attempt has passed staff verification — before
+    that, the endpoint refuses.
+    """
+    db = ctx.db
+    student = get_own_student(ctx)
+    attempt = _get_own_attempt(
+        db, student, attempt_id,
+        options=(
+            joinedload(ExamAttempt.exam).joinedload(Exam.course),
+            joinedload(ExamAttempt.exam).joinedload(Exam.module),
+        ),
+    )
+
+    if attempt.status != "verified":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Answers become visible once your result is verified by staff",
+        )
+
+    # All questions of the attempt, in the order the student saw them
+    # (question_order), including ones they never answered.
+    ordered_ids = [UUID(qid) for qid in (attempt.question_order or [])]
+    question_by_id = {
+        q.id: q
+        for q in db.query(Question).filter(Question.id.in_(ordered_ids)).all()
+    } if ordered_ids else {}
+    answer_by_qid = {
+        a.question_id: a
+        for a in db.query(StudentAnswer).filter(StudentAnswer.attempt_id == attempt.id).all()
+    }
+
+    questions_review = []
+    for position, q_id in enumerate(ordered_ids, start=1):
+        q = question_by_id.get(q_id)
+        if not q:
+            continue
+        ans = answer_by_qid.get(q_id)
+        questions_review.append({
+            "position": position,
+            "question_text": q.question_text,
+            "image_url": q.image_url,
+            "option_a": q.option_a,
+            "option_b": q.option_b,
+            "option_c": q.option_c,
+            "option_d": q.option_d,
+            "correct_option": q.correct_option,
+            "marks": q.marks,
+            "explanation": q.explanation,
+            "selected_option": ans.selected_option if ans else None,
+            "is_correct": ans.is_correct if ans else None,
+            "marks_obtained": (ans.marks_obtained if ans else 0) or 0,
+        })
+
+    return {
+        "attempt": {
+            "id": str(attempt.id),
+            "exam_title": attempt.exam.title,
+            "course_name": attempt.exam.course.name if attempt.exam.course else None,
+            "module_name": attempt.exam.module.module_name if attempt.exam.module else None,
+            "attempt_number": attempt.attempt_number,
+            "total_questions": len(ordered_ids),
+            "total_answered": attempt.total_answered or 0,
+            "correct_answers": attempt.correct_answers or 0,
+            "total_marks": attempt.total_marks or 0,
+            "obtained_marks": attempt.obtained_marks or 0,
+            "percentage": attempt.percentage or 0,
+            "passed": attempt.passed or False,
+            "verified_at": attempt.verified_at.isoformat() if attempt.verified_at else None,
+        },
+        "questions": questions_review,
+    }
